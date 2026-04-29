@@ -18,6 +18,12 @@ import robomimic.utils.python_utils as PyUtils
 import robomimic.utils.log_utils as LogUtils
 import robomimic.utils.lang_utils as LangUtils
 
+from robomimic.utils.temporal_encodings import (
+    calculate_growth_rate_parameter,
+    progress_positional_encoding_transformer,
+    progress_saturalising_encoding,
+    IdlenessEncoder,
+)
 
 class SequenceDataset(torch.utils.data.Dataset):
     def __init__(
@@ -40,6 +46,7 @@ class SequenceDataset(torch.utils.data.Dataset):
         load_next_obs=True,
         lang=None,
         demo_limit=None,
+        temporal_encoding_config=None,
     ):
         """
         Dataset class for fetching sequences of experience.
@@ -140,6 +147,20 @@ class SequenceDataset(torch.utils.data.Dataset):
         self.get_pad_mask = get_pad_mask
 
         self.load_demo_info(filter_by_attribute=self.filter_by_attribute, demo_limit=demo_limit)
+        
+        self.synthetic_obs_keys = {
+            "idleness",
+            "saturating_progress_encoding",
+            "sinusoidal_progress_encoding",
+        }
+        self.additional_keys_to_load = {
+            "robot0_joint_vel",
+            "robot0_gripper_qvel",
+        }
+        self.obs_keys_in_file = [k for k in self.obs_keys if k not in self.synthetic_obs_keys]
+        self.obs_keys_in_file += list(self.additional_keys_to_load)
+
+        self.temporal_encoding_config = temporal_encoding_config or {}
 
         # maybe prepare for observation normalization
         self.obs_normalization_stats = None
@@ -151,11 +172,11 @@ class SequenceDataset(torch.utils.data.Dataset):
 
         # maybe store dataset in memory for fast access
         if self.hdf5_cache_mode in ["all", "low_dim"]:
-            obs_keys_in_memory = self.obs_keys
+            obs_keys_in_memory = self.obs_keys_in_file
             if self.hdf5_cache_mode == "low_dim":
                 # only store low-dim observations
                 obs_keys_in_memory = []
-                for k in self.obs_keys:
+                for k in self.obs_keys_in_file:
                     if ObsUtils.key_is_obs_modality(k, "low_dim"):
                         obs_keys_in_memory.append(k)
             self.obs_keys_in_memory = obs_keys_in_memory
@@ -182,6 +203,15 @@ class SequenceDataset(torch.utils.data.Dataset):
 
         self.close_and_delete_hdf5_handle()
 
+    def _compute_agent_velocity_from_obs(self, obs_dict):
+        # obs_dict: dict of arrays shaped (T, D)
+        joint = obs_dict["robot0_joint_vel"]
+        gripper = obs_dict["robot0_gripper_qvel"]
+        mag_joint = np.linalg.norm(joint, axis=-1)
+        mag_gripper = np.linalg.norm(gripper, axis=-1)
+        mag_total = mag_joint + 0.1 * mag_gripper
+        return mag_total[:, None].astype(np.float32)
+    
     def load_demo_info(self, filter_by_attribute=None, demos=None, demo_limit=None):
         """
         Args:
@@ -341,12 +371,12 @@ class SequenceDataset(torch.utils.data.Dataset):
         # Run through all trajectories. For each one, compute minimal observation statistics, and then aggregate
         # with the previous statistics.
         ep = self.demos[0]
-        obs_traj = {k: self.hdf5_file["data/{}/obs/{}".format(ep, k)][()].astype('float32') for k in self.obs_keys}
+        obs_traj = {k: self.hdf5_file["data/{}/obs/{}".format(ep, k)][()].astype('float32') for k in self.obs_keys_in_file}
         obs_traj = ObsUtils.process_obs_dict(obs_traj)
         merged_stats = _compute_traj_stats(obs_traj)
         print("SequenceDataset: normalizing observations...")
         for ep in LogUtils.custom_tqdm(self.demos[1:]):
-            obs_traj = {k: self.hdf5_file["data/{}/obs/{}".format(ep, k)][()].astype('float32') for k in self.obs_keys}
+            obs_traj = {k: self.hdf5_file["data/{}/obs/{}".format(ep, k)][()].astype('float32') for k in self.obs_keys_in_file}
             obs_traj = ObsUtils.process_obs_dict(obs_traj)
             traj_stats = _compute_traj_stats(obs_traj)
             merged_stats = _aggregate_traj_stats(merged_stats, traj_stats)
@@ -480,7 +510,7 @@ class SequenceDataset(torch.utils.data.Dataset):
         meta["obs"] = self.get_obs_sequence_from_demo(
             demo_id,
             index_in_demo=index_in_demo,
-            keys=self.obs_keys,
+            keys=self.obs_keys_in_file,
             num_frames_to_stack=self.n_frame_stack - 1,
             seq_length=self.seq_length,
             prefix="obs"
@@ -490,7 +520,7 @@ class SequenceDataset(torch.utils.data.Dataset):
             meta["next_obs"] = self.get_obs_sequence_from_demo(
                 demo_id,
                 index_in_demo=index_in_demo,
-                keys=self.obs_keys,
+                keys=self.obs_keys_in_file,
                 num_frames_to_stack=self.n_frame_stack - 1,
                 seq_length=self.seq_length,
                 prefix="next_obs"
@@ -500,12 +530,50 @@ class SequenceDataset(torch.utils.data.Dataset):
             goal = self.get_obs_sequence_from_demo(
                 demo_id,
                 index_in_demo=goal_index,
-                keys=self.obs_keys,
+                keys=self.obs_keys_in_file,
                 num_frames_to_stack=0,
                 seq_length=1,
                 prefix="next_obs",
             )
             meta["goal_obs"] = {k: goal[k][0] for k in goal}  # remove sequence dimension for goal
+
+        # --- Temporal encodings (opt-in via obs_keys) ---
+        seq_len = meta["actions"].shape[0]
+        t = np.arange(seq_len) + index_in_demo
+
+        # Sinusoidal progress encoding
+        if "sinusoidal_progress_encoding" in self.obs_keys:
+            pe = progress_positional_encoding_transformer(t, d_model=self.temporal_encoding_config["sinusoidal_dim"])
+            meta["obs"]["sinusoidal_progress_encoding"] = pe.astype(np.float32)
+            if self.load_next_obs:
+                meta["next_obs"]["sinusoidal_progress_encoding"] = pe.astype(np.float32)
+
+        # Saturating progress encoding
+        if "saturating_progress_encoding" in self.obs_keys:
+            omega = self.temporal_encoding_config.get("saturating_omega", None)
+            if omega is None:
+                omega = calculate_growth_rate_parameter(max_steps=self.temporal_encoding_config.get("max_train_set_steps"))
+                # print("calculated saturating progress encoding omega: {}".format(omega))
+            sap = progress_saturalising_encoding(t, omega=omega)[:, None]
+            meta["obs"]["saturating_progress_encoding"] = sap.astype(np.float32)
+            if self.load_next_obs:
+                meta["next_obs"]["saturating_progress_encoding"] = sap.astype(np.float32)
+
+        # Idleness encoding (from agent_velocity)
+        if "idleness" in self.obs_keys:
+            vel = self._compute_agent_velocity_from_obs(meta["obs"])
+            alpha = self.temporal_encoding_config.get("idleness_alpha", None)
+            if alpha is None:
+                alpha = calculate_growth_rate_parameter(max_steps=self.temporal_encoding_config.get("max_train_set_steps"))
+                # print("calculated idleness encoding alpha: {}".format(alpha))
+            idleness_encoder = IdlenessEncoder(vmax=self.temporal_encoding_config.get("max_train_set_agent_velocity"), rest_thresh=self.temporal_encoding_config["idleness_rest_thresh"], alpha=alpha)
+            idleness = np.zeros_like(vel, dtype=np.float32)
+            idleness_encoder.reset()
+            for i in range(seq_len):
+                idleness[i] = idleness_encoder.step(vel[i])
+            meta["obs"]["idleness"] = idleness
+            if self.load_next_obs:
+                meta["next_obs"]["idleness"] = idleness
 
         # get action components
         ac_dict = OrderedDict()

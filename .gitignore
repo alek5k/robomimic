@@ -1,3 +1,10 @@
+bc_trained_models/
+hbc_trained_models/
+diffusion_policy_trained_models/
+trained_models/
+datasets/
+robomimic/exps/paper/
+
 # pip distribution folder
 dist/
 

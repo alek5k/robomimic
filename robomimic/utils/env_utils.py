@@ -5,6 +5,7 @@ in dataset files.
 """
 from copy import deepcopy
 import robomimic.envs.env_base as EB
+from robomimic.envs.wrappers import TemporalEncodingWrapper
 from robomimic.utils.log_utils import log_warning
 
 
@@ -338,6 +339,15 @@ def wrap_env_from_config(env, config):
     Wraps environment using the provided Config object to determine which wrappers
     to use (if any).
     """
+
+    needs_temporal = any(k in set(config.observation.modalities.obs.low_dim) for k in [
+        "sinusoidal_progress_encoding",
+        "saturating_progress_encoding",
+        "idleness",
+    ])
+    if needs_temporal:
+        env = TemporalEncodingWrapper(env, temporal_encoding_config=config.observation.temporal_encodings)
+
     if ("frame_stack" in config.train) and (config.train.frame_stack > 1):
         from robomimic.envs.wrappers import FrameStackWrapper
         env = FrameStackWrapper(env, num_frames=config.train.frame_stack)

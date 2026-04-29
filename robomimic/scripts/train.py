@@ -99,7 +99,8 @@ def train(config, device, resume=False):
             dataset_config=dataset_cfg,
             action_keys=config.train.action_keys,
             all_obs_keys=config.all_obs_keys,
-            verbose=True
+            verbose=True,
+            temporal_cfg=config.observation.temporal_encodings
         )
         shape_meta_list.append(shape_meta)
 

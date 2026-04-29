@@ -117,7 +117,7 @@ def get_env_metadata_from_dataset(dataset_path, set_env_specific_obs_processors=
     return env_meta
 
 
-def get_shape_metadata_from_dataset(dataset_config, action_keys, all_obs_keys=None, verbose=False):
+def get_shape_metadata_from_dataset(dataset_config, action_keys, all_obs_keys=None, verbose=False, temporal_cfg=None):
     """
     Retrieves shape metadata from dataset.
 
@@ -152,6 +152,13 @@ def get_shape_metadata_from_dataset(dataset_config, action_keys, all_obs_keys=No
     action_dim = sum([demo[key].shape[1] for key in action_keys])
     shape_meta["ac_dim"] = action_dim
 
+    if temporal_cfg is not None:
+        synthetic_shapes = {
+            "idleness": (1,),
+            "saturating_progress_encoding": (1,),
+            "sinusoidal_progress_encoding": (temporal_cfg.get("sinusoidal_dim"),),
+        }
+
     # observation dimensions
     all_shapes = OrderedDict()
 
@@ -160,7 +167,9 @@ def get_shape_metadata_from_dataset(dataset_config, action_keys, all_obs_keys=No
         all_obs_keys = [k for k in demo["obs"]]
 
     for k in sorted(all_obs_keys):
-        if k == LangUtils.LANG_EMB_OBS_KEY:
+        if k in synthetic_shapes and temporal_cfg is not None:
+            initial_shape = synthetic_shapes[k]
+        elif k == LangUtils.LANG_EMB_OBS_KEY:
             # NOTE: currently supporting fixed language embedding per dataset
             ## that is fetched from dataset config and not from file
             assert "lang" in dataset_config, "Expected 'lang' key in dataset config."

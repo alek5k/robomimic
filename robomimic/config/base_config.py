@@ -314,6 +314,15 @@ class BaseConfig(Config):
         self.observation.encoder.scan.core_kwargs = Config()                    # See models/obs_core.py for important kwargs to set and defaults used
         self.observation.encoder.scan.core_kwargs.do_not_lock_keys()
 
+        self.observation.temporal_encodings = Config()
+        self.observation.temporal_encodings.sinusoidal_dim = 128
+        self.observation.temporal_encodings.saturating_omega = None  # None => auto-compute
+        self.observation.temporal_encodings.idleness_rest_thresh = 0.03
+        self.observation.temporal_encodings.idleness_alpha = None    # None => auto-compute
+        self.observation.temporal_encodings.max_train_set_steps = None  # None 
+        self.observation.temporal_encodings.max_train_set_agent_velocity = None  # None 
+        self.observation.temporal_encodings.do_not_lock_keys()
+
     def meta_config(self):
         """
         This function populates the `config.meta` attribute of the config. This portion of the config 

@@ -8,6 +8,12 @@ from collections import deque
 
 import robomimic.envs.env_base as EB
 
+from robomimic.utils.temporal_encodings import (
+    calculate_growth_rate_parameter,
+    progress_positional_encoding_transformer,
+    progress_saturalising_encoding,
+    IdlenessEncoder,
+)
 
 class EnvWrapper(object):
     """
@@ -218,3 +224,62 @@ class FrameStackWrapper(EnvWrapper):
     def _to_string(self):
         """Info to pretty print."""
         return "num_frames={}".format(self.num_frames)
+
+
+class TemporalEncodingWrapper(EnvWrapper):
+    def __init__(self, env, temporal_encoding_config=None):
+        super(TemporalEncodingWrapper, self).__init__(env=env)
+
+        self.temporal_encoding_config = temporal_encoding_config or {}
+
+        alpha = self.temporal_encoding_config.get("idleness_alpha", None)
+        if alpha is None:
+            alpha = calculate_growth_rate_parameter(max_steps=self.temporal_encoding_config["max_train_set_steps"])
+        self._idleness_vmax = self.temporal_encoding_config["max_train_set_agent_velocity"]
+        assert self._idleness_vmax is not None, "Must provide max_train_set_agent_velocity in temporal_encoding_config for idleness encoding"
+        self._idleness_encoder = IdlenessEncoder(vmax=self._idleness_vmax, rest_thresh=self.temporal_encoding_config["idleness_rest_thresh"], alpha=alpha)
+
+        omega = self.temporal_encoding_config.get("saturating_omega", None)
+        if omega is None:
+            assert self.temporal_encoding_config["max_train_set_steps"] is not None, "Must provide max_train_set_steps in temporal_encoding_config to auto-compute saturating_omega"
+            max_steps = self.temporal_encoding_config["max_train_set_steps"]
+            omega = calculate_growth_rate_parameter(max_steps=max_steps)
+        self._saturating_progress_omega = omega
+
+        self._timestep = 0
+
+    def _update_temporal_encodings(self, obs):
+        mag_joint = np.linalg.norm(obs["robot0_joint_vel"])
+        mag_gripper = np.linalg.norm(obs["robot0_gripper_qvel"])
+        velocity = mag_joint + 0.1 * mag_gripper
+        obs["agent_velocity"] = np.array([velocity], dtype=np.float32)
+
+        if "sinusoidal_progress_encoding" in obs:
+            obs["sinusoidal_progress_encoding"] = progress_positional_encoding_transformer(t=self._timestep, d_model=self.temporal_encoding_config["sinusoidal_dim"])
+
+        if "saturating_progress_encoding" in obs:
+            sp = progress_saturalising_encoding(t=self._timestep, omega=self._saturating_progress_omega)
+            obs["saturating_progress_encoding"] = np.array([sp], dtype=np.float32)
+
+        if "agent_velocity" in obs and "idleness" in obs:
+            obs["idleness"] = np.array([self._idleness_encoder.step(float(obs["agent_velocity"]))], dtype=np.float32)
+
+    def reset(self):
+        obs = self.env.reset()
+        self._idleness_encoder.reset()
+        self._timestep = 0
+        self._update_temporal_encodings(obs)
+        return obs
+
+    def reset_to(self, state):
+        obs = self.env.reset_to(state)
+        self._idleness_encoder.reset()
+        self._timestep = 0
+        self._update_temporal_encodings(obs)
+        return obs
+
+    def step(self, action):
+        obs, r, done, info = self.env.step(action)
+        self._timestep += 1
+        self._update_temporal_encodings(obs)
+        return obs, r, done, info

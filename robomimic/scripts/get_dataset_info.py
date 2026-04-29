@@ -27,6 +27,15 @@ import json
 import argparse
 import numpy as np
 
+def compute_agent_velocity_from_obs(obs_dict):
+    # obs_dict: dict of arrays shaped (T, D)
+    joint = obs_dict["robot0_joint_vel"]
+    gripper = obs_dict["robot0_gripper_qvel"]
+    mag_joint = np.linalg.norm(joint, axis=-1)
+    mag_gripper = np.linalg.norm(gripper, axis=-1)
+    mag_total = mag_joint + 0.1 * mag_gripper
+    return mag_total[:, None].astype(np.float32)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -75,10 +84,22 @@ if __name__ == "__main__":
     traj_lengths = []
     action_min = np.inf
     action_max = -np.inf
+    velocity_min = np.inf
+    velocity_max = -np.inf
     for ep in demos:
         traj_lengths.append(f["data/{}/actions".format(ep)].shape[0])
         action_min = min(action_min, np.min(f["data/{}/actions".format(ep)][()]))
         action_max = max(action_max, np.max(f["data/{}/actions".format(ep)][()]))
+        # Compute agent velocity for this trajectory
+        obs_gripper = f["data/{}/obs/robot0_gripper_qvel".format(ep)]
+        obs_joint = f["data/{}/obs/robot0_joint_vel".format(ep)]
+        obs_dict = {
+            "robot0_gripper_qvel": obs_gripper,
+            "robot0_joint_vel": obs_joint,
+        }
+        v = compute_agent_velocity_from_obs(obs_dict)
+        velocity_min = min(velocity_min, np.min(v))
+        velocity_max = max(velocity_max, np.max(v))
     traj_lengths = np.array(traj_lengths)
 
     # report statistics on the data
@@ -89,6 +110,8 @@ if __name__ == "__main__":
     print("traj length std: {}".format(np.std(traj_lengths)))
     print("traj length min: {}".format(np.min(traj_lengths)))
     print("traj length max: {}".format(np.max(traj_lengths)))
+    print("velocity min: {}".format(velocity_min))
+    print("velocity max: {}".format(velocity_max))
     print("action min: {}".format(action_min))
     print("action max: {}".format(action_max))
     print("")

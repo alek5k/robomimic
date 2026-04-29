@@ -95,6 +95,7 @@ def get_example_model(dataset_path, device):
             "robot0_gripper_qpos", 
             "object",
         )),
+        temporal_cfg=config.observation.temporal_encodings
     )
 
     # make BC model

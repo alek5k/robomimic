@@ -1,0 +1,39 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "robomimic debug",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "robomimic/scripts/train.py",
+            "console": "integratedTerminal",
+            "cwd": "/home/sydney1/Repos/robomimic/",
+            "args": [
+                // "--config", "robomimic/exps/temporaldp/square/mh/image/hbc.json", 
+                "--config", "robomimic/exps/temporaldp/square/mh/image/tc_diffusion_policy.json", 
+                "--dataset", "datasets/square/mh/image_v15.hdf5"
+            ]
+        },
+        {
+            "name": "robomimic print dataset info",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "robomimic/scripts/get_dataset_info.py",
+            "console": "integratedTerminal",
+            "cwd": "/home/sydney1/Repos/robomimic/",
+            "args": [
+                "--dataset", "datasets/square/mh/image_v15.hdf5"
+            ]
+        }
+    ]
+}

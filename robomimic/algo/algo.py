@@ -235,7 +235,7 @@ class Algo(object):
 
         # we will search the nested batch dictionary for the following special batch dict keys
         # and apply the processing function to their values (which correspond to observations)
-        obs_keys = ["obs", "next_obs", "goal_obs"]
+        obs_keys = ["obs", "next_obs", "goal_obs", "subgoals", "target_subgoals"]
 
         def recurse_helper(d):
             """
