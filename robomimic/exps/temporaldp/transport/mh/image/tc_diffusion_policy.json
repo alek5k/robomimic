@@ -1,7 +1,7 @@
 {
     "algo_name": "diffusion_policy",
     "experiment": {
-        "name": "temporaldp_tc_diffusion_policy_square_mh_image",
+        "name": "temporaldp_tc_diffusion_policy_transport_mh_image",
         "validate": true,
         "logging": {
             "terminal_output_to_txt": true,
@@ -38,8 +38,8 @@
         "ckpt_path": null
     },
     "train": {
-        "data": "~/Repos/robomimic/robomimic/../datasets/square/mh/image_v15.hdf5",
-        "output_dir": "../trained_models/temporaldp/tc_diffusion_policy/square/mh/image/trained_models",
+        "data": "~/Repos/robomimic/robomimic/../datasets/transport/mh/image_v15.hdf5",
+        "output_dir": "../trained_models/temporaldp/tc_diffusion_policy/transport/mh/image/trained_models",
         "normalize_weights_by_ds_size": false,
         "num_data_workers": 0,
         "hdf5_cache_mode": "low_dim",
@@ -161,8 +161,8 @@
             "saturating_omega": null,
             "idleness_rest_thresh": 0.03,
             "idleness_alpha": null,
-            "max_train_set_steps": 1051,
-            "max_train_set_agent_velocity": 6.167486190795898
+            "max_train_set_steps": 2614,
+            "max_train_set_agent_velocity": 6.155917644500732
         },
         "encoder": {
             "low_dim": {
