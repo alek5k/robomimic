@@ -152,6 +152,7 @@ def get_shape_metadata_from_dataset(dataset_config, action_keys, all_obs_keys=No
     action_dim = sum([demo[key].shape[1] for key in action_keys])
     shape_meta["ac_dim"] = action_dim
 
+    synthetic_shapes = {}
     if temporal_cfg is not None:
         synthetic_shapes = {
             "idleness": (1,),
@@ -167,7 +168,7 @@ def get_shape_metadata_from_dataset(dataset_config, action_keys, all_obs_keys=No
         all_obs_keys = [k for k in demo["obs"]]
 
     for k in sorted(all_obs_keys):
-        if k in synthetic_shapes and temporal_cfg is not None:
+        if k in synthetic_shapes:
             initial_shape = synthetic_shapes[k]
         elif k == LangUtils.LANG_EMB_OBS_KEY:
             # NOTE: currently supporting fixed language embedding per dataset

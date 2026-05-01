@@ -254,14 +254,15 @@ class TemporalEncodingWrapper(EnvWrapper):
         velocity = mag_joint + 0.1 * mag_gripper
         obs["agent_velocity"] = np.array([velocity], dtype=np.float32)
 
-        if "sinusoidal_progress_encoding" in obs:
-            obs["sinusoidal_progress_encoding"] = progress_positional_encoding_transformer(t=self._timestep, d_model=self.temporal_encoding_config["sinusoidal_dim"])
+        if self.temporal_encoding_config.get("use_sinusoidal_progress_encoding", False):
+            pe = progress_positional_encoding_transformer(t=self._timestep, d_model=self.temporal_encoding_config["sinusoidal_dim"])
+            obs["sinusoidal_progress_encoding"] = pe.reshape(-1).astype(np.float32) # flatten to 1D array
 
-        if "saturating_progress_encoding" in obs:
+        if self.temporal_encoding_config.get("use_saturating_progress_encoding", False):
             sp = progress_saturalising_encoding(t=self._timestep, omega=self._saturating_progress_omega)
             obs["saturating_progress_encoding"] = np.array([sp], dtype=np.float32)
 
-        if "agent_velocity" in obs and "idleness" in obs:
+        if self.temporal_encoding_config.get("use_idleness_encoding", False):
             obs["idleness"] = np.array([self._idleness_encoder.step(float(obs["agent_velocity"]))], dtype=np.float32)
 
     def reset(self):

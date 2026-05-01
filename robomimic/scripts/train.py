@@ -32,6 +32,7 @@ import torch
 from torch.utils.data import DataLoader
 
 import robomimic
+from robomimic.utils.tracking_utils import best_effort_notify
 import robomimic.utils.train_utils as TrainUtils
 import robomimic.utils.torch_utils as TorchUtils
 import robomimic.utils.obs_utils as ObsUtils
@@ -95,12 +96,13 @@ def train(config, device, resume=False):
         deep_update(env_meta, config.experiment.env_meta_update_dict)
         env_meta_list.append(env_meta)
 
+        temporal_cfg = config.observation["temporal_encodings"] if "temporal_encodings" in config.observation else None
         shape_meta = FileUtils.get_shape_metadata_from_dataset(
             dataset_config=dataset_cfg,
             action_keys=config.train.action_keys,
             all_obs_keys=config.all_obs_keys,
             verbose=True,
-            temporal_cfg=config.observation.temporal_encodings
+            temporal_cfg=temporal_cfg
         )
         shape_meta_list.append(shape_meta)
 
@@ -283,6 +285,9 @@ def train(config, device, resume=False):
     best_success_rate = {k: -1. for k in envs} if config.experiment.rollout.enabled else None
     last_ckpt_time = time.time()
 
+    print("Training started at {}".format(time.strftime("%Y-%m-%d %H:%M:%S")))
+    best_effort_notify("{} - training started".format(ckpt_dir))
+
     start_epoch = 1 # epoch numbers start at 1
     if resume:
         # load variable state needed for train loop
@@ -415,6 +420,10 @@ def train(config, device, resume=False):
             if updated_stats["ckpt_reason"] is not None:
                 ckpt_reason = updated_stats["ckpt_reason"]
 
+        if epoch % 50 == 0:
+            best_effort_notify("{} - finished epoch {} of {}".format(ckpt_dir, epoch, config.train.num_epochs))
+            print("Finished epoch {} at {}".format(epoch, time.strftime("%Y-%m-%d %H:%M:%S")))
+
         # get variable state for saving model
         variable_state = dict(
             epoch=epoch,
@@ -450,8 +459,8 @@ def train(config, device, resume=False):
         )
 
         # keep a backup model in case last.pth is malformed (e.g. job died last time during saving)
-        shutil.copyfile(latest_model_path, latest_model_backup_path)
-        print("\nsaved backup of latest model at {}\n".format(latest_model_backup_path))
+        # shutil.copyfile(latest_model_path, latest_model_backup_path)
+        # print("\nsaved backup of latest model at {}\n".format(latest_model_backup_path))
 
         # Finally, log memory usage in MB
         process = psutil.Process(os.getpid())
@@ -480,6 +489,9 @@ def main(args):
 
     if args.name is not None:
         config.experiment.name = args.name
+
+    if args.seed is not None:
+        config.train.seed = args.seed
 
     # get torch device
     device = TorchUtils.get_torch_device(try_to_use_cuda=config.train.cuda)
@@ -513,6 +525,8 @@ def main(args):
     except Exception as e:
         res_str = "run failed with error:\n{}\n\n{}".format(e, traceback.format_exc())
     print(res_str)
+    best_effort_notify(res_str)
+    print("Finished run at {}".format(time.strftime("%Y-%m-%d %H:%M:%S")))
 
 
 if __name__ == "__main__":
@@ -548,6 +562,14 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="(optional) if provided, override the dataset path defined in the config",
+    )
+
+    # Training seed, to override the one in the config
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="(optional) if provided, override train.seed defined in the config",
     )
 
     # debug mode

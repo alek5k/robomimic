@@ -12,7 +12,7 @@
         "save": {
             "enabled": true,
             "every_n_seconds": null,
-            "every_n_epochs": 20,
+            "every_n_epochs": null,
             "epochs": [],
             "on_best_validation": false,
             "on_best_rollout_return": false,
@@ -23,7 +23,7 @@
         "env": null,
         "additional_envs": null,
         "render": false,
-        "render_video": true,
+        "render_video": false,
         "keep_all_videos": false,
         "video_skip": 5,
         "rollout": {
@@ -155,6 +155,9 @@
             }
         },
         "temporal_encodings": {
+            "use_sinusoidal_progress_encoding": true,
+            "use_saturating_progress_encoding": true,
+            "use_idleness_encoding": true,
             "sinusoidal_dim": 128,
             "saturating_omega": null,
             "idleness_rest_thresh": 0.03,

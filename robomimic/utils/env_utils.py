@@ -340,13 +340,13 @@ def wrap_env_from_config(env, config):
     to use (if any).
     """
 
-    needs_temporal = any(k in set(config.observation.modalities.obs.low_dim) for k in [
+    needs_temporal = ("temporal_encodings" in config.observation) and ("modalities" in config.observation) and any(k in set(config.observation.modalities.obs.low_dim) for k in [
         "sinusoidal_progress_encoding",
         "saturating_progress_encoding",
         "idleness",
     ])
     if needs_temporal:
-        env = TemporalEncodingWrapper(env, temporal_encoding_config=config.observation.temporal_encodings)
+        env = TemporalEncodingWrapper(env, temporal_encoding_config=config.observation["temporal_encodings"])
 
     if ("frame_stack" in config.train) and (config.train.frame_stack > 1):
         from robomimic.envs.wrappers import FrameStackWrapper

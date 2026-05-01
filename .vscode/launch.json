@@ -12,7 +12,7 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "robomimic debug",
+            "name": "robomimic debug TCDP",
             "type": "debugpy",
             "request": "launch",
             "program": "robomimic/scripts/train.py",
@@ -34,6 +34,15 @@
             "args": [
                 "--dataset", "datasets/square/mh/image_v15.hdf5"
             ]
+        },
+        {
+            "name": "robomimic analysis",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "robomimic/scripts/analysis_temporal.py",
+            "console": "integratedTerminal",
+            "cwd": "/home/sydney1/Repos/robomimic/",
+            "args": []
         }
     ]
 }

@@ -6,7 +6,7 @@ import h5py
 import numpy as np
 
 parser = argparse.ArgumentParser(description="Visualize episodes and timesteps from a robomimic HDF5 dataset")
-parser.add_argument("--source", default="datasets/square/mh/image_v15.hdf5", help="Path to HDF5 dataset file")
+parser.add_argument("--source", default="datasets/can/mh/image_v15.hdf5", help="Path to HDF5 dataset file")
 parser.add_argument("--image-key", default=None, help="Primary image key to display (if not set, will detect first image key)")
 parser.add_argument("--window-title", default="Robomimic Dataset Visualizer", help="Window title")
 parser.add_argument("--image-size", type=int, default=512, help="Displayed image size")
@@ -92,7 +92,7 @@ class DatasetVisualizer(QMainWindow):
         first_demo = self.demos[0]
         demo_obs_keys = list(self.h5_file[f"data/{first_demo}/obs"].keys())
         image_keys = [k for k in demo_obs_keys if "image" in k.lower()]
-        
+        print(image_keys)
         if not image_keys:
             raise ValueError("No image observations found in dataset")
         
@@ -103,6 +103,7 @@ class DatasetVisualizer(QMainWindow):
             if image_key not in image_keys:
                 raise ValueError(f"Image key '{image_key}' not found. Available: {image_keys}")
             self.image_key = image_key
+        self.image_keys = [self.image_key] + [key for key in image_keys if key != self.image_key]
         
         self.current_episode_index = 0
         self.current_demo_key = None
@@ -142,22 +143,30 @@ class DatasetVisualizer(QMainWindow):
         control_row.addWidget(self.step_label)
         control_row.addWidget(self.step_slider)
 
-        # Image panel with space for current image and next image side-by-side
+        # Image panel with space for all available image observations side-by-side
         image_panel = QWidget()
         image_layout = QHBoxLayout(image_panel)
         image_layout.setContentsMargins(0, 0, 0, 0)
         image_layout.setSpacing(10)
 
-        self.obs_image_widget = QLabel("No image")
-        self.obs_image_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.obs_image_widget.setMinimumSize(self.image_size, self.image_size)
+        self.image_widgets = {}
+        for key in self.image_keys:
+            image_column = QWidget()
+            image_column_layout = QVBoxLayout(image_column)
+            image_column_layout.setContentsMargins(0, 0, 0, 0)
+            image_column_layout.setSpacing(4)
 
-        self.next_obs_image_widget = QLabel("No image")
-        self.next_obs_image_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.next_obs_image_widget.setMinimumSize(self.image_size, self.image_size)
+            title = QLabel(key)
+            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        image_layout.addWidget(self.obs_image_widget)
-        image_layout.addWidget(self.next_obs_image_widget)
+            image_widget = QLabel("No image")
+            image_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image_widget.setMinimumSize(self.image_size, self.image_size)
+
+            image_column_layout.addWidget(title)
+            image_column_layout.addWidget(image_widget)
+            image_layout.addWidget(image_column)
+            self.image_widgets[key] = image_widget
 
         self.attribute_table = QTableWidget()
         self.attribute_table.setColumnCount(2)
@@ -182,8 +191,8 @@ class DatasetVisualizer(QMainWindow):
             self.current_episode_length = 0
             self.step_slider.setMaximum(0)
             self.step_label.setText("Step: 0/0")
-            self.obs_image_widget.setText("No episodes found")
-            self.next_obs_image_widget.setText("")
+            for image_widget in self.image_widgets.values():
+                image_widget.setText("No episodes found")
             self.attribute_table.setRowCount(0)
             return
 
@@ -197,8 +206,8 @@ class DatasetVisualizer(QMainWindow):
             self.step_slider.setMaximum(0)
             self.step_slider.setValue(0)
             self.step_label.setText("Step: 0/0")
-            self.obs_image_widget.setText("Empty episode")
-            self.next_obs_image_widget.setText("")
+            for image_widget in self.image_widgets.values():
+                image_widget.setText("Empty episode")
             self.attribute_table.setRowCount(0)
             return
 
@@ -231,30 +240,19 @@ class DatasetVisualizer(QMainWindow):
 
     def _render_image(self, step_idx: int):
         demo_group = self.h5_file[f"data/{self.current_demo_key}"]
-        
-        # Render obs image
-        if f"obs/{self.image_key}" in demo_group:
-            frame = demo_group[f"obs/{self.image_key}"][step_idx]
-            frame_hwc = self._to_hwc_uint8(frame)
 
-            if frame_hwc is not None:
-                self._set_image_pixmap(self.obs_image_widget, frame_hwc)
+        for image_key in self.image_keys:
+            image_widget = self.image_widgets[image_key]
+            if f"obs/{image_key}" in demo_group:
+                frame = demo_group[f"obs/{image_key}"][step_idx]
+                frame_hwc = self._to_hwc_uint8(frame)
+
+                if frame_hwc is not None:
+                    self._set_image_pixmap(image_widget, frame_hwc)
+                else:
+                    image_widget.setText(f"Unsupported shape: {frame.shape}")
             else:
-                self.obs_image_widget.setText(f"Unsupported shape: {frame.shape}")
-        else:
-            self.obs_image_widget.setText(f"Key 'obs/{self.image_key}' not found")
-
-        # Render next_obs image if it exists
-        if f"next_obs/{self.image_key}" in demo_group:
-            frame = demo_group[f"next_obs/{self.image_key}"][step_idx]
-            frame_hwc = self._to_hwc_uint8(frame)
-
-            if frame_hwc is not None:
-                self._set_image_pixmap(self.next_obs_image_widget, frame_hwc)
-            else:
-                self.next_obs_image_widget.setText(f"Unsupported shape: {frame.shape}")
-        else:
-            self.next_obs_image_widget.setText("next_obs\nnot found")
+                image_widget.setText(f"Key 'obs/{image_key}' not found")
 
     def _set_image_pixmap(self, label: QLabel, frame_hwc: np.ndarray):
         height, width, channels = frame_hwc.shape

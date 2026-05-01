@@ -64,13 +64,14 @@ def get_exp_dir(config, auto_remove_exp_dir=False, resume=False):
         time_str = sorted(subdir_lst)[-1]  # get the most recent subdirectory
         assert os.path.isdir(os.path.join(base_output_dir, time_str)), "Found item {} that is not a subdirectory in {}".format(time_str, base_output_dir)
     elif os.path.exists(base_output_dir):
-        if not auto_remove_exp_dir:
-            ans = input("WARNING: model directory ({}) already exists! \noverwrite? (y/n)\n".format(base_output_dir))
-        else:
-            ans = "y"
-        if ans == "y":
-            print("REMOVING")
-            shutil.rmtree(base_output_dir)
+        pass
+        # if not auto_remove_exp_dir:
+        #     ans = input("WARNING: model directory ({}) already exists! \noverwrite? (y/n)\n".format(base_output_dir))
+        # else:
+        #     ans = "y"
+        # if ans == "y":
+        #     print("REMOVING")
+        #     shutil.rmtree(base_output_dir)
 
     # only make model directory if model saving is enabled
     output_dir = None
@@ -185,7 +186,7 @@ def dataset_factory(config, obs_keys, filter_by_attribute=None, dataset_path=Non
         hdf5_use_swmr=config.train.hdf5_use_swmr,
         hdf5_normalize_obs=config.train.hdf5_normalize_obs,
         filter_by_attribute=filter_by_attribute,
-        temporal_encoding_config=config.observation.temporal_encodings,
+        temporal_encoding_config=config.observation["temporal_encodings"] if "temporal_encodings" in config.observation else None,
     )
 
     ds_kwargs["hdf5_path"] = [ds_cfg["path"] for ds_cfg in config.train.data]

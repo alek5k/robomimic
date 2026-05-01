@@ -315,6 +315,9 @@ class BaseConfig(Config):
         self.observation.encoder.scan.core_kwargs.do_not_lock_keys()
 
         self.observation.temporal_encodings = Config()
+        self.observation.temporal_encodings.use_sinusoidal_progress_encoding = False
+        self.observation.temporal_encodings.use_saturating_progress_encoding = False
+        self.observation.temporal_encodings.use_idleness_encoding = False
         self.observation.temporal_encodings.sinusoidal_dim = 128
         self.observation.temporal_encodings.saturating_omega = None  # None => auto-compute
         self.observation.temporal_encodings.idleness_rest_thresh = 0.03

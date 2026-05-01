@@ -12,7 +12,7 @@
         "save": {
             "enabled": true,
             "every_n_seconds": null,
-            "every_n_epochs": 20,
+            "every_n_epochs": null,
             "epochs": [],
             "on_best_validation": false,
             "on_best_rollout_return": false,
@@ -23,7 +23,7 @@
         "env": null,
         "additional_envs": null,
         "render": false,
-        "render_video": true,
+        "render_video": false,
         "keep_all_videos": false,
         "video_skip": 5,
         "rollout": {
@@ -41,7 +41,7 @@
         "data": "/home/sydney1/Repos/robomimic/robomimic/../datasets/transport/mh/image_v15.hdf5",
         "output_dir": "../trained_models/temporaldp/bc_rnn/transport/mh/image/trained_models",
         "normalize_weights_by_ds_size": false,
-        "num_data_workers": 2,
+        "num_data_workers": 0,
         "hdf5_cache_mode": "low_dim",
         "hdf5_use_swmr": true,
         "hdf5_load_next_obs": false,
