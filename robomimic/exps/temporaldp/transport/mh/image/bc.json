@@ -38,7 +38,7 @@
         "ckpt_path": null
     },
     "train": {
-        "data": "/home/sydney1/Repos/robomimic/robomimic/../datasets/transport/mh/image_v15.hdf5",
+        "data": "~/Repos/robomimic/robomimic/../datasets/transport/mh/image_v15.hdf5",
         "output_dir": "../trained_models/temporaldp/bc/transport/mh/image/trained_models",
         "normalize_weights_by_ds_size": false,
         "num_data_workers": 0,
