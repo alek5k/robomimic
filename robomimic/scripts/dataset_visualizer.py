@@ -6,7 +6,7 @@ import h5py
 import numpy as np
 
 parser = argparse.ArgumentParser(description="Visualize episodes and timesteps from a robomimic HDF5 dataset")
-parser.add_argument("--source", default="datasets/can/mh/image_v15.hdf5", help="Path to HDF5 dataset file")
+parser.add_argument("--source", default="datasets/transport/ph/image_v15.hdf5", help="Path to HDF5 dataset file")
 parser.add_argument("--image-key", default=None, help="Primary image key to display (if not set, will detect first image key)")
 parser.add_argument("--window-title", default="Robomimic Dataset Visualizer", help="Window title")
 parser.add_argument("--image-size", type=int, default=512, help="Displayed image size")

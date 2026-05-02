@@ -12,6 +12,7 @@ from pathlib import Path
 TRAIN_EPOCH_RE = re.compile(r"\bTrain Epoch\s+(\d+)\b")
 TASK_ORDER = ["can", "square", "lift", "tool_hang", "transport"]
 ALGO_ORDER = ["bc", "bc_rnn", "hbc", "diffusion_policy", "tc_diffusion_policy"]
+DATASET_TYPE_ORDER = ["ph", "mh"]
 ANSI_GREEN = "\033[32m"
 ANSI_BLUE = "\033[34m"
 ANSI_RESET = "\033[0m"
@@ -231,7 +232,12 @@ def format_progress(run: RunProgress, width: int, now: float, active_within_seco
 def sort_key(run: RunProgress):
     task_index = TASK_ORDER.index(run.task) if run.task in TASK_ORDER else len(TASK_ORDER)
     algo_index = ALGO_ORDER.index(run.algo) if run.algo in ALGO_ORDER else len(ALGO_ORDER)
-    return (task_index, algo_index, run.dataset_type, run.run_dir.name)
+    dataset_type_index = (
+        DATASET_TYPE_ORDER.index(run.dataset_type)
+        if run.dataset_type in DATASET_TYPE_ORDER
+        else len(DATASET_TYPE_ORDER)
+    )
+    return (dataset_type_index, run.dataset_type, task_index, algo_index, run.run_dir.name)
 
 
 def main():
@@ -268,12 +274,12 @@ def main():
     print("Found {} run(s) under {}".format(len(runs), root))
     print("")
     now = time.time()
-    last_task = None
+    last_dataset_type = None
     for run in sorted(runs, key=sort_key):
-        if last_task is not None and run.task != last_task:
+        if last_dataset_type is not None and run.dataset_type != last_dataset_type:
             print("")
         print(format_progress(run, width=args.width, now=now, active_within_seconds=args.active_within))
-        last_task = run.task
+        last_dataset_type = run.dataset_type
 
 
 if __name__ == "__main__":

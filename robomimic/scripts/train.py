@@ -421,7 +421,7 @@ def train(config, device, resume=False):
                 ckpt_reason = updated_stats["ckpt_reason"]
 
         if epoch % 50 == 0:
-            best_effort_notify("{} - finished epoch {} of {}".format(ckpt_dir, epoch, config.train.num_epochs))
+            # best_effort_notify("{} - finished epoch {} of {}".format(ckpt_dir, epoch, config.train.num_epochs))
             print("Finished epoch {} at {}".format(epoch, time.strftime("%Y-%m-%d %H:%M:%S")))
 
         # get variable state for saving model

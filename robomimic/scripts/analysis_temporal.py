@@ -41,11 +41,13 @@ class ParsedDatasetInfo:
 @dataclass
 class AnalysisConfig:
     num_episodes: int = 300
-    task_name: str = "can"
+    task_name: str = "transport"
+    dataset_split: str = "mh"
     histogram_bins: int = 81
     include_rankings: bool = False
     include_demo_dataset: bool = False
     generate_tex_tables: bool = False
+    clip_demo_horizon: bool = False
 
     h_space: float = 0.05
     w_space: float = 0.05
@@ -82,14 +84,14 @@ matplotlib.rcParams.update({
 ## DEFAULT CONFIGS ##
 #####################
 
-def default_robomimic_mh_datasets(task_name: str) -> list[DatasetLocator]:
+def default_robomimic_datasets(task_name: str, dataset_split: str) -> list[DatasetLocator]:
     return [
-        DatasetLocator(path=f"datasets/{task_name}/mh/image_v15.hdf5", label="Demo", dataset_type=DatasetType.DEMO),
-        DatasetLocator(path=f"rollouts/{task_name}/bc/*.hdf5", label="BC", dataset_type=DatasetType.BASELINE),
-        # DatasetLocator(path=f"rollouts/{task_name}/bc_rnn/*.hdf5", label="BC-RNN", dataset_type=DatasetType.BASELINE),
-        DatasetLocator(path=f"rollouts/{task_name}/hbc/*.hdf5", label="HBC", dataset_type=DatasetType.BASELINE),
-        DatasetLocator(path=f"rollouts/{task_name}/diffusion_policy/*.hdf5", label="DP", dataset_type=DatasetType.BASELINE),
-        DatasetLocator(path=f"rollouts/{task_name}/tc_diffusion_policy/*.hdf5", label="TC-DP", dataset_type=DatasetType.INFERENCE),
+        DatasetLocator(path=f"datasets/{task_name}/{dataset_split}/image_v15.hdf5", label="Demo", dataset_type=DatasetType.DEMO),
+        # DatasetLocator(path=f"rollouts/{task_name}/{dataset_split}/bc/*.hdf5", label="BC", dataset_type=DatasetType.BASELINE),
+        # DatasetLocator(path=f"rollouts/{task_name}/{dataset_split}/bc_rnn/*.hdf5", label="BC-RNN", dataset_type=DatasetType.BASELINE),
+        # DatasetLocator(path=f"rollouts/{task_name}/{dataset_split}/hbc/*.hdf5", label="HBC", dataset_type=DatasetType.BASELINE),
+        # DatasetLocator(path=f"rollouts/{task_name}/{dataset_split}/diffusion_policy/*.hdf5", label="DP", dataset_type=DatasetType.BASELINE),
+        # DatasetLocator(path=f"rollouts/{task_name}/{dataset_split}/tc_diffusion_policy/*.hdf5", label="TC-DP", dataset_type=DatasetType.INFERENCE),
     ]
 
 
@@ -119,7 +121,11 @@ def print_table(datasets: list[ParsedDatasetInfo]):
     print(tabulate(rows, headers=headers, tablefmt="github", floatfmt=".4f", missingval=""))
 
 
-def extract_episode_lengths(dataset_path: str, num_episodes: int | None = None) -> list[int]:
+def extract_episode_lengths(
+    dataset_path: str,
+    num_episodes: int | None = None,
+    horizon: int | None = None,
+) -> list[int]:
     with h5py.File(dataset_path, "r") as f:
         demos = sorted(list(f["data"].keys()), key=lambda name: int(name.split("_")[-1]))
         if num_episodes is not None:
@@ -131,8 +137,18 @@ def extract_episode_lengths(dataset_path: str, num_episodes: int | None = None) 
             length = demo_group.attrs.get("num_samples", None)
             if length is None:
                 length = demo_group["actions"].shape[0]
+            if horizon is not None:
+                length = min(int(length), horizon)
             lengths.append(int(length))
     return lengths
+
+
+def resolve_horizon(task_name: str, dataset_split: str) -> int:
+    if dataset_split == "ph" and task_name in {"can", "square", "lift"}:
+        return 400
+    if task_name == "transport":
+        return 1100 if dataset_split == "mh" else 700
+    return 500
 
 
 def task_name_from_path(path: str) -> str:
@@ -149,11 +165,13 @@ def main(cfg: AnalysisConfig):
     task_name = cfg.task_name
     if task_name not in TASK_NAMES:
         raise ValueError(f"task_name must be one of {sorted(TASK_NAMES)}, got {task_name!r}")
+    if cfg.dataset_split not in {"mh", "ph"}:
+        raise ValueError("dataset_split must be 'mh' or 'ph', got {!r}".format(cfg.dataset_split))
 
-    datasets = default_robomimic_mh_datasets(task_name)
+    datasets = default_robomimic_datasets(task_name, cfg.dataset_split)
     dataset_types = {DatasetType.DEMO, DatasetType.BASELINE, DatasetType.INFERENCE}
     parsed_datasets = parse_datasets(cfg, select_datasets_by_type(datasets, dataset_types))
-    generate_graphs(cfg, parsed_datasets, save_prefix=f"robomimic_{task_name}_mh")
+    generate_graphs(cfg, parsed_datasets, save_prefix=f"robomimic_{task_name}_{cfg.dataset_split}")
 
     if cfg.generate_tex_tables:
         print_table(sorted(parsed_datasets.values(), key=lambda item: item.W_total or 0.0))
@@ -161,6 +179,7 @@ def main(cfg: AnalysisConfig):
 
 def parse_datasets(cfg: AnalysisConfig, datasets: list[DatasetLocator]) -> dict[str, ParsedDatasetInfo]:
     parsed_datasets = {}
+    horizon = resolve_horizon(cfg.task_name, cfg.dataset_split)
 
     for dataset in datasets:
         if dataset.dataset_type == DatasetType.DEMO:
@@ -169,7 +188,12 @@ def parse_datasets(cfg: AnalysisConfig, datasets: list[DatasetLocator]) -> dict[
                 continue
 
             print(f"Parsing dataset: {dataset.label or 'Demo'}")
-            step_counts = extract_episode_lengths(dataset.path, cfg.num_episodes)
+            demo_horizon = min(horizon, 500) if cfg.clip_demo_horizon else None
+            step_counts = extract_episode_lengths(
+                dataset.path,
+                cfg.num_episodes,
+                horizon=demo_horizon,
+            )
             task_name = task_name_from_path(dataset.path)
             parsed_datasets[dataset.path] = ParsedDatasetInfo(
                 path=dataset.path,
@@ -191,7 +215,11 @@ def parse_datasets(cfg: AnalysisConfig, datasets: list[DatasetLocator]) -> dict[
         combined_step_counts = []
         task_name = None
         for rollout_path in rollout_paths:
-            step_counts = extract_episode_lengths(rollout_path, cfg.num_episodes)
+            step_counts = extract_episode_lengths(
+                rollout_path,
+                cfg.num_episodes,
+                horizon=horizon,
+            )
             if not step_counts:
                 print(f"Skipping rollout dataset without episodes: {rollout_path}")
                 continue
@@ -238,9 +266,8 @@ def generate_graphs(cfg: AnalysisConfig, parsed_datasets: dict[str, ParsedDatase
     output_dir.mkdir(parents=True, exist_ok=True)
 
     demonstration_dataset = next(d for d in parsed_datasets.values() if d.is_demo_dataset)
-    step_count_arrays = [np.asarray(d.step_counts, dtype=float) for d in parsed_datasets.values()]
-    combined_step_counts = np.concatenate(step_count_arrays)
-    bins_step_counts = np.histogram_bin_edges(combined_step_counts, bins=cfg.histogram_bins)
+    horizon = resolve_horizon(cfg.task_name, cfg.dataset_split)
+    bins_step_counts = np.linspace(0.0, float(horizon), cfg.histogram_bins + 1)
     ref_step_hist, _ = np.histogram(demonstration_dataset.step_counts, bins=bins_step_counts)
     step_centers = 0.5 * (bins_step_counts[:-1] + bins_step_counts[1:])
     step_widths = np.diff(bins_step_counts)
@@ -251,7 +278,13 @@ def generate_graphs(cfg: AnalysisConfig, parsed_datasets: dict[str, ParsedDatase
         if cfg.include_demo_dataset or not info.is_demo_dataset
     ]
     if not rows_to_plot:
-        raise ValueError("No non-demo datasets to plot.")
+        rows_to_plot = [
+            (path, info)
+            for path, info in parsed_datasets.items()
+            if info.is_demo_dataset
+        ]
+        if not rows_to_plot:
+            raise ValueError("No datasets to plot.")
 
     ncols = 1 + int(cfg.include_rankings)
     width_ratios = [1] + ([0.25] if cfg.include_rankings else [])
@@ -307,6 +340,7 @@ def generate_graphs(cfg: AnalysisConfig, parsed_datasets: dict[str, ParsedDatase
             facecolor="none",
             edgecolor="blue",
         )
+        stepcount_axis.set_xlim(0, horizon)
 
         wd_stepcount = parsed_info.W_episode or 0.0
         label_stepcount_wd = f"$W_{{episode}}={wd_stepcount:.2f}$"
