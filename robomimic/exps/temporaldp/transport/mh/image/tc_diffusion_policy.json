@@ -136,12 +136,17 @@
                     "robot0_eef_pos",
                     "robot0_eef_quat",
                     "robot0_gripper_qpos",
+                    "robot1_eef_pos",
+                    "robot1_eef_quat",
+                    "robot1_gripper_qpos",
                     "idleness",
                     "sinusoidal_progress_encoding"
                 ],
                 "rgb": [
-                    "agentview_image",
-                    "robot0_eye_in_hand_image"
+                    "shouldercamera0_image",
+                    "robot0_eye_in_hand_image",
+                    "shouldercamera1_image",
+                    "robot1_eye_in_hand_image"
                 ],
                 "depth": [],
                 "scan": []
