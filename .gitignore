@@ -7,6 +7,8 @@ robomimic/exps/paper/
 rollouts/
 robomimic/scripts/analysis_temporal/
 
+.vscode/
+
 # pip distribution folder
 dist/
 
