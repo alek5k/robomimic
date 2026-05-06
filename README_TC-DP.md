@@ -1,22 +1,29 @@
 # Overview
-Note this is a fork of the Robomimic repository for the Temporally-Conditioned Diffusion Policy Paper.
+This is a fork of the [Robomimic study](https://robomimic.github.io/study/) study and [repository](https://github.com/ARISE-Initiative/robomimic) for the Temporally-Conditioned Diffusion Policy Paper.
 
-https://robomimic.github.io/study/
 
+Temporal conditioning encodings are implemented in:
+`robomimic/utils/temporal_encodings.py`
+
+Temporal encoding wrapper is implemented in:
+`robomimic/envs/wrappers.py`, class `TemporalEncodingWrapper`
+
+Temporal analysis is implemented in `scripts/analysis_temporal.py`
 
 ### Installing
-https://robomimic.github.io/docs/introduction/installation.html
+Specific installation instructions for robomimic can be found [here](https://robomimic.github.io/docs/introduction/installation.html).
 
-conda create -n robomimic2 python=3.10
-conda activate robomimic2
+```bash
+conda create -n robomimic python=3.10
+conda activate robomimic
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 cd robomimic
 pip install -e .
 pip install "robosuite==1.5.1"
+```
 
 ### Download dataset
-https://robomimic.github.io/docs/datasets/robomimic_v0.1.html
-https://github.com/ARISE-Initiative/robomimic/blob/master/robomimic/scripts/download_datasets.py
+Dataset info can be found [here](https://robomimic.github.io/docs/datasets/robomimic_v0.1.html).
 
 ```
 cd robomimic/scripts
@@ -26,8 +33,7 @@ python download_datasets.py --tasks sim --dataset_types ph --hdf5_types raw
 Then postprocess the dataset to get image datasets:
 
 ```
-chmod +x extract_obs_from_raw_datasets.sh
-extract_obs_from_raw_datasets.sh
+./extract_obs_from_raw_datasets.sh
 ```
 
 ### Config Setup
@@ -41,10 +47,11 @@ robomimic/robomimic/exps/temporaldp/can/ph/image/tc_diffusion_policy.json
 ```
 
 ### Training
-BC, BC-RNN, DP and TCDP
+Replace ALGO below with:
+bc, bc_rnn, diffusion_policy and tc_diffusion_policy.
 
 ```bash
-conda activate robomimic2
+conda activate robomimic
 ENV=can
 SPLIT=ph
 ALGO=bc
@@ -57,7 +64,7 @@ done
 ### Evaluations
 Replace with your RUN_ID generated during training.
 ```bash
-conda activate robomimic2
+conda activate robomimic
 for RUN_ID in 20260503212530 20260504194247 20260505175124; do
     N_ROLLOUTS=100
     ENV=square
