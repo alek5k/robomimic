@@ -20,8 +20,7 @@
             "cwd": "/home/sydney1/Repos/robomimic/",
             "args": [
                 // "--config", "robomimic/exps/temporaldp/square/mh/image/hbc.json", 
-                "--config", "robomimic/exps/temporaldp/square/mh/image/tc_diffusion_policy.json", 
-                "--dataset", "datasets/square/mh/image_v15.hdf5"
+                "--config", "robomimic/exps/temporaldp/can/ph/image/tc_diffusion_policy_debug.json", 
             ]
         },
         {

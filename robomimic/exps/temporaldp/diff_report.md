@@ -3,15 +3,15 @@ can you tell me how temporaldp/can/mh/image/hbc.json is generated. does it refle
 
 Let me show you by comparing the three key files:   
 
-Read [](file:///home/sydney1/Repos/robomimic/robomimic/exps/temporaldp/can/mh/image/hbc.json#1-1), lines 1 to 80
-Read [](file:///home/sydney1/Repos/robomimic/robomimic/exps/paper/core/can/mh/low_dim/hbc.json#1-1), lines 1 to 80
-Read [](file:///home/sydney1/Repos/robomimic/robomimic/exps/paper/core/can/mh/image/bc.json#30-30), lines 30 to 60
+Read [](file://~/Repos/robomimic/robomimic/exps/temporaldp/can/mh/image/hbc.json#1-1), lines 1 to 80
+Read [](file://~/Repos/robomimic/robomimic/exps/paper/core/can/mh/low_dim/hbc.json#1-1), lines 1 to 80
+Read [](file://~/Repos/robomimic/robomimic/exps/paper/core/can/mh/image/bc.json#30-30), lines 30 to 60
 
 Let me show you the algo sections which are most revealing:   
 
-Read [](file:///home/sydney1/Repos/robomimic/robomimic/exps/paper/core/can/mh/image/bc.json#70-70), lines 70 to 150
-Read [](file:///home/sydney1/Repos/robomimic/robomimic/exps/paper/core/can/mh/low_dim/hbc.json#60-60), lines 60 to 250
-Read [](file:///home/sydney1/Repos/robomimic/robomimic/exps/temporaldp/can/mh/image/hbc.json#180-180), lines 180 to 280
+Read [](file://~/Repos/robomimic/robomimic/exps/paper/core/can/mh/image/bc.json#70-70), lines 70 to 150
+Read [](file://~/Repos/robomimic/robomimic/exps/paper/core/can/mh/low_dim/hbc.json#60-60), lines 60 to 250
+Read [](file://~/Repos/robomimic/robomimic/exps/temporaldp/can/mh/image/hbc.json#180-180), lines 180 to 280
 
 Perfect! Yes, it's exactly a **hybrid combination**. Let me show you the breakdown:
 
@@ -66,15 +66,15 @@ temporaldp/hbc = {
 
 
 ok do the same for diffusion_policy.json
-Read [](file:///home/sydney1/Repos/robomimic/robomimic/exps/temporaldp/can/mh/image/diffusion_policy.json#1-1), lines 1 to 150
+Read [](file://~/Repos/robomimic/robomimic/exps/temporaldp/can/mh/image/diffusion_policy.json#1-1), lines 1 to 150
 
-Read [](file:///home/sydney1/Repos/robomimic/robomimic/exps/templates/diffusion_policy.json#1-1), lines 1 to 150
+Read [](file://~/Repos/robomimic/robomimic/exps/templates/diffusion_policy.json#1-1), lines 1 to 150
 
 Perfect! Let me compare:  
 
-Read [](file:///home/sydney1/Repos/robomimic/robomimic/exps/templates/diffusion_policy.json#100-100), lines 100 to 184
+Read [](file://~/Repos/robomimic/robomimic/exps/templates/diffusion_policy.json#100-100), lines 100 to 184
 
-Read [](file:///home/sydney1/Repos/robomimic/robomimic/exps/temporaldp/can/mh/image/diffusion_policy.json#150-150), lines 150 to 206
+Read [](file://~/Repos/robomimic/robomimic/exps/temporaldp/can/mh/image/diffusion_policy.json#150-150), lines 150 to 206
 
 ## temporaldp/can/mh/image/diffusion_policy.json = **templates/diffusion_policy.json (algo) + image/bc.json (training & encoders)**
 

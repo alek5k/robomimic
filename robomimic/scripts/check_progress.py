@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 TRAIN_EPOCH_RE = re.compile(r"\bTrain Epoch\s+(\d+)\b")
+SUCCESS_RE = re.compile(r"_success_([0-9]+(?:\.[0-9]+)?)\.pth$")
 TASK_ORDER = ["can", "square", "lift", "tool_hang", "transport"]
 ALGO_ORDER = ["bc", "bc_rnn", "hbc", "diffusion_policy", "tc_diffusion_policy"]
 DATASET_TYPE_ORDER = ["ph", "mh"]
@@ -32,6 +33,7 @@ class RunProgress:
     log_mtime: float | None
     config_mtime: float | None
     last_pth_mtime: float | None
+    best_success_rate: float | None
 
 
 def find_log_paths(root: Path) -> list[Path]:
@@ -93,6 +95,7 @@ def collect_progress(root: Path) -> list[RunProgress]:
         run_dir = log_path.parent.parent
         config_path = run_dir / "config.json"
         last_pth_path = run_dir / "last.pth"
+        models_dir = run_dir / "models"
         config = load_config(config_path) if config_path.exists() else {}
         algo, task, dataset_type = run_parts_from_path(run_dir)
         try:
@@ -121,9 +124,25 @@ def collect_progress(root: Path) -> list[RunProgress]:
                 log_mtime=log_mtime,
                 config_mtime=config_mtime,
                 last_pth_mtime=last_pth_mtime,
+                best_success_rate=best_success_rate_from_models_dir(models_dir),
             )
         )
     return runs
+
+
+def best_success_rate_from_models_dir(models_dir: Path) -> float | None:
+    if not models_dir.exists():
+        return None
+
+    best = None
+    for path in models_dir.glob("model_epoch_*.pth"):
+        match = SUCCESS_RE.search(path.name)
+        if not match:
+            continue
+        success = float(match.group(1))
+        if best is None or success > best:
+            best = success
+    return best
 
 
 def progress_bar(current: int | None, total: int | None, width: int) -> str:
@@ -216,6 +235,12 @@ def format_progress(run: RunProgress, width: int, now: float, active_within_seco
         pct = "{:6.1f}%".format(100.0 * min(current / total, 1.0))
         epoch_text = "{}/{}".format(current, total)
 
+    success_text = (
+        "{:.2f}".format(run.best_success_rate)
+        if run.best_success_rate is not None
+        else "?"
+    )
+
     return "{} {} {:>11}  {:>7}  {}  {:<20}  {:<10}  ({:<2})  {}".format(
         progress_bar(current, total, width),
         pct,
@@ -225,7 +250,7 @@ def format_progress(run: RunProgress, width: int, now: float, active_within_seco
         run.algo,
         run.task,
         run.dataset_type,
-        run.run_dir.name,
+        "{}  best={}".format(run.run_dir.name, success_text),
     )
 
 
@@ -251,7 +276,7 @@ def main():
     parser.add_argument(
         "--width",
         type=int,
-        default=32,
+        default=24,
         help="progress bar width in characters",
     )
     parser.add_argument(

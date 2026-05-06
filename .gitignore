@@ -4,6 +4,8 @@ diffusion_policy_trained_models/
 trained_models/
 datasets/
 robomimic/exps/paper/
+rollouts/
+robomimic/scripts/analysis_temporal/
 
 # pip distribution folder
 dist/

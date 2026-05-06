@@ -157,7 +157,7 @@
             "use_sinusoidal_progress_encoding": true,
             "use_saturating_progress_encoding": false,
             "use_idleness_encoding": true,
-            "sinusoidal_dim": 128,
+            "sinusoidal_dim": 16,
             "saturating_omega": null,
             "idleness_rest_thresh": 0.03,
             "idleness_alpha": null,
