@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 TASK_ORDER = ["can", "square", "lift", "tool_hang", "transport"]
-ALGO_ORDER = ["bc", "bc_rnn", "hbc", "diffusion_policy", "tc_diffusion_policy"]
+ALGO_ORDER = ["bc", "bc_rnn", "hbc", "diffusion_policy", "tc_diffusion_policy", "diffusion_policy_mod", "tc_diffusion_policy_mod"]
 DATASET_TYPE_ORDER = ["ph", "mh"]
 ANSI_GREEN = "\033[32m"
 ANSI_BLUE = "\033[34m"
@@ -129,7 +129,7 @@ def format_status(run: RolloutProgress, now: float, active_within_seconds: int, 
 
 
 def format_progress(run: RolloutProgress, now: float, active_within_seconds: int) -> str:
-    return "{}  {:>7}  {:<20}  {:<10}  ({:<2})  {}".format(
+    return "{}  {:>7}  {:<25}  {:<10}  ({:<2})  {}".format(
         format_status(run, now, active_within_seconds, color=True),
         format_duration(rollout_duration_seconds(run)),
         run.algo,

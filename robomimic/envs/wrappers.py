@@ -252,6 +252,13 @@ class TemporalEncodingWrapper(EnvWrapper):
         mag_joint = np.linalg.norm(obs["robot0_joint_vel"])
         mag_gripper = np.linalg.norm(obs["robot0_gripper_qvel"])
         velocity = mag_joint + 0.1 * mag_gripper
+
+        # Support for multiple robots:
+        if "robot1_joint_vel" in obs:
+            mag_joint_robot1 = np.linalg.norm(obs["robot1_joint_vel"])
+            mag_gripper_robot1 = np.linalg.norm(obs["robot1_gripper_qvel"])
+            velocity += mag_joint_robot1 + 0.1 * mag_gripper_robot1
+
         obs["agent_velocity"] = np.array([velocity], dtype=np.float32)
 
         if self.temporal_encoding_config.get("use_sinusoidal_progress_encoding", False):

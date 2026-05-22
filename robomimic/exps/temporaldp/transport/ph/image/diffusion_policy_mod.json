@@ -1,7 +1,7 @@
 {
     "algo_name": "diffusion_policy",
     "experiment": {
-        "name": "temporaldp_tc_diffusion_policy_transport_ph_image",
+        "name": "temporaldp_diffusion_policy_mod_transport_ph_image",
         "validate": true,
         "logging": {
             "terminal_output_to_txt": true,
@@ -39,7 +39,7 @@
     },
     "train": {
         "data": "~/Repos/robomimic/robomimic/../datasets/transport/ph/image_v15.hdf5",
-        "output_dir": "../trained_models/temporaldp/tc_diffusion_policy/transport/ph/image/trained_models",
+        "output_dir": "../trained_models/temporaldp/diffusion_policy_mod/transport/ph/image/trained_models",
         "normalize_weights_by_ds_size": false,
         "num_data_workers": 0,
         "hdf5_cache_mode": "low_dim",
@@ -138,9 +138,7 @@
                     "robot0_gripper_qpos",
                     "robot1_eef_pos",
                     "robot1_eef_quat",
-                    "robot1_gripper_qpos",
-                    "idleness",
-                    "sinusoidal_progress_encoding"
+                    "robot1_gripper_qpos"
                 ],
                 "rgb": [
                     "shouldercamera0_image",
@@ -158,17 +156,6 @@
                 "scan": []
             }
         },
-        "temporal_encodings": {
-            "use_sinusoidal_progress_encoding": true,
-            "use_saturating_progress_encoding": false,
-            "use_idleness_encoding": true,
-            "sinusoidal_dim": 128,
-            "saturating_omega": null,
-            "idleness_rest_thresh": 0.03,
-            "idleness_alpha": null,
-            "max_train_set_steps": 714,
-            "max_train_set_agent_velocity": 4.475658893585205
-        },
         "encoder": {
             "low_dim": {
                 "core_class": null,
@@ -179,19 +166,14 @@
             "rgb": {
                 "core_class": "VisualCore",
                 "core_kwargs": {
-                    "feature_dimension": 64,
+                    "feature_dimension": null,
                     "backbone_class": "ResNet18Conv",
                     "backbone_kwargs": {
                         "pretrained": false,
                         "input_coord_conv": false
                     },
-                    "pool_class": "SpatialSoftmax",
-                    "pool_kwargs": {
-                        "num_kp": 32,
-                        "learnable_temperature": false,
-                        "temperature": 1.0,
-                        "noise_std": 0.0
-                    }
+                    "pool_class": "SpatialMeanPool",
+                    "pool_kwargs": {}
                 },
                 "obs_randomizer_class": "CropRandomizer",
                 "obs_randomizer_kwargs": {

@@ -10,6 +10,7 @@ Temporal encoding wrapper is implemented in:
 
 Temporal analysis is implemented in `scripts/analysis_temporal.py`
 
+
 ### Installing
 Specific installation instructions for robomimic can be found [here](https://robomimic.github.io/docs/introduction/installation.html).
 
@@ -35,6 +36,9 @@ Then postprocess the dataset to get image datasets:
 ```
 ./extract_obs_from_raw_datasets.sh
 ```
+
+### Download TC-DP trained checkpoints and inference datasets
+`./download_checkpoints_and_inference_datasets.sh`
 
 ### Config Setup
 The configs for the paper are already included in the repository. Within these configs, the `train/data` config variables need to be set to correspond to your repo location in the following configs:

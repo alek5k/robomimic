@@ -34,6 +34,10 @@ def compute_agent_velocity_from_obs(obs_dict):
     mag_joint = np.linalg.norm(joint, axis=-1)
     mag_gripper = np.linalg.norm(gripper, axis=-1)
     mag_total = mag_joint + 0.1 * mag_gripper
+    if "robot1_joint_vel" in obs_dict:
+        mag_joint_robot1 = np.linalg.norm(obs_dict["robot1_joint_vel"], axis=-1)
+        mag_gripper_robot1 = np.linalg.norm(obs_dict["robot1_gripper_qvel"], axis=-1)
+        mag_total += mag_joint_robot1 + 0.1 * mag_gripper_robot1
     return mag_total[:, None].astype(np.float32)
 
 if __name__ == "__main__":
@@ -41,6 +45,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
+        default="/home/sydney1/Repos/robomimic/datasets/transport/ph/image_v15.hdf5",
         help="path to hdf5 dataset",
     )
     parser.add_argument(

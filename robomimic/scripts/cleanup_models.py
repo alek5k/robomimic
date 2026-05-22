@@ -9,18 +9,38 @@ from pathlib import Path
 
 def iter_candidates(root: Path) -> list[Path]:
     candidates: list[Path] = []
+
+    all_models = list(root.rglob("model_epoch_*.pth"))
+    all_models_parents = list(set(p.parent for p in all_models))
+
     for path in root.rglob("model_epoch_*.pth"):
         if path.name == "last_bak.pth":
             continue
         if "_success_" in path.name:
             continue
         candidates.append(path)
+
+    for parent in all_models_parents:
+        sister_models = list(parent.glob("model_epoch_*success_*.pth"))
+        success_rates = [float(s.name.split("_success_")[-1].split(".pth")[0]) for s in sister_models]
+
+        if success_rates:
+            argmax_idx = max(range(len(success_rates)), key=success_rates.__getitem__)
+            best_model = sister_models[argmax_idx]
+            sister_models.remove(best_model)
+            candidates.extend(sister_models)
+
     for path in root.rglob("last_bak.pth"):
         candidates.append(path)
+    
     return sorted(set(candidates))
 
 
 def confirm_delete(path: Path, allow_all: bool) -> str:
+    print("Directory contents:")
+    for item in path.parent.rglob("*"):
+        print(f"  {item}")
+    print()
     prompt = "Delete {}? [y/N/a/q] ".format(path)
     while True:
         answer = input(prompt).strip().lower()
@@ -97,7 +117,7 @@ def main() -> None:
     parser.add_argument(
         "--root",
         type=Path,
-        default=Path("trained_models/temporaldp"),
+        default=Path(__file__).parent.parent.parent / "trained_models/temporaldp",
         help="root directory to scan (default: trained_models/temporaldp)",
     )
     parser.add_argument(

@@ -1,7 +1,7 @@
 # Overview
 
 https://robomimic.github.io/study/
-
+https://github.com/alexander-soare/little_experiments/blob/main/diffusion_spatial_softmax.md
 
 ### Installing
 https://robomimic.github.io/docs/introduction/installation.html
@@ -50,6 +50,17 @@ Note: the datasets are specified in the config file, so no need to pass explicit
 ## Training
 BC, BC-RNN, DP and TCDP
 
+Single seed:
+```bash
+ENV=square
+SPLIT=ph
+ALGO=tc_diffusion_policy_mod
+GPU=1
+SEED=3
+gorobomimic && CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/${ENV}/${SPLIT}/image/${ALGO}.json --seed=${SEED}
+```
+
+Multiple seeds:
 ```bash
 ENV=square
 SPLIT=ph
@@ -67,20 +78,18 @@ for SEED in 1 2 3; do
     gorobomimic && CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/${ENV}/${SPLIT}/image/${ALGO}.json --seed=${SEED}
 done
 ---
-ENV=square
+ENV=transport
 SPLIT=ph
 ALGO=diffusion_policy
-GPU=1
+GPU=0
 for SEED in 1 2 3; do
     gorobomimic && CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/${ENV}/${SPLIT}/image/${ALGO}.json --seed=${SEED}
 done
 ---
-ENV=square
+ENV=transport
 SPLIT=ph
-ALGO=tc_diffusion_policy
-GPU=0
-SEED=3
-gorobomimic && CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/${ENV}/${SPLIT}/image/${ALGO}.json --seed=${SEED}
+ALGO=tc_diffusion_policy_mod
+GPU=1
 for SEED in 1 2 3; do
     gorobomimic && CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/${ENV}/${SPLIT}/image/${ALGO}.json --seed=${SEED}
 done
@@ -89,11 +98,11 @@ done
 
 ## Evaluations
 ```bash
-for RUN_ID in 20260503212530 20260504194247 20260505175124; do
+for RUN_ID in 20260511134003 20260512121109 20260512121147; do
     N_ROLLOUTS=100
     ENV=square
-    ALGO=tc_diffusion_policy
-    GPU=0
+    ALGO=tc_diffusion_policy_mod
+    GPU=1
     SPLIT=ph
     SEED=$((RUN_ID % 4294967295))
     BASE="trained_models/temporaldp/${ALGO}/${ENV}/${SPLIT}/image/trained_models/temporaldp_${ALGO}_${ENV}_${SPLIT}_image/${RUN_ID}"

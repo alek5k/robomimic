@@ -210,6 +210,10 @@ class SequenceDataset(torch.utils.data.Dataset):
         mag_joint = np.linalg.norm(joint, axis=-1)
         mag_gripper = np.linalg.norm(gripper, axis=-1)
         mag_total = mag_joint + 0.1 * mag_gripper
+        if "robot1_joint_vel" in obs_dict:
+            mag_joint_robot1 = np.linalg.norm(obs_dict["robot1_joint_vel"], axis=-1)
+            mag_gripper_robot1 = np.linalg.norm(obs_dict["robot1_gripper_qvel"], axis=-1)
+            mag_total += mag_joint_robot1 + 0.1 * mag_gripper_robot1
         return mag_total[:, None].astype(np.float32)
     
     def load_demo_info(self, filter_by_attribute=None, demos=None, demo_limit=None):

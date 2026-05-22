@@ -7,12 +7,13 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
+from read_tensorboard_data import get_training_summary
+from datetime import datetime
 
 TRAIN_EPOCH_RE = re.compile(r"\bTrain Epoch\s+(\d+)\b")
 SUCCESS_RE = re.compile(r"_success_([0-9]+(?:\.[0-9]+)?)\.pth$")
 TASK_ORDER = ["can", "square", "lift", "tool_hang", "transport"]
-ALGO_ORDER = ["bc", "bc_rnn", "hbc", "diffusion_policy", "tc_diffusion_policy"]
+ALGO_ORDER = ["bc", "bc_rnn", "hbc", "diffusion_policy", "diffusion_policy_mod", "tc_diffusion_policy", "tc_diffusion_policy_mod"]
 DATASET_TYPE_ORDER = ["ph", "mh"]
 ANSI_GREEN = "\033[32m"
 ANSI_BLUE = "\033[34m"
@@ -30,8 +31,8 @@ class RunProgress:
     algo: str
     task: str
     dataset_type: str
-    log_mtime: float | None
-    config_mtime: float | None
+    last_updated_time: float | None
+    started_time: float | None
     last_pth_mtime: float | None
     best_success_rate: float | None
 
@@ -98,14 +99,11 @@ def collect_progress(root: Path) -> list[RunProgress]:
         models_dir = run_dir / "models"
         config = load_config(config_path) if config_path.exists() else {}
         algo, task, dataset_type = run_parts_from_path(run_dir)
-        try:
-            log_mtime = log_path.stat().st_mtime
-        except OSError:
-            log_mtime = None
-        try:
-            config_mtime = config_path.stat().st_mtime
-        except OSError:
-            config_mtime = None
+
+        tensorboard_data_file = next(run_dir.glob("**/*tfevents.*"))
+        summary = get_training_summary(str(tensorboard_data_file.absolute()))
+
+
         try:
             last_pth_mtime = last_pth_path.stat().st_mtime
         except OSError:
@@ -115,14 +113,14 @@ def collect_progress(root: Path) -> list[RunProgress]:
                 run_dir=run_dir,
                 log_path=log_path,
                 config_path=config_path,
-                current_epoch=latest_train_epoch(log_path),
+                current_epoch=summary['max_steps'],# latest_train_epoch(log_path),
                 total_epochs=total_epochs_from_config(config),
                 experiment_name=experiment_name_from_config(config, run_dir),
                 algo=algo,
                 task=task,
                 dataset_type=dataset_type,
-                log_mtime=log_mtime,
-                config_mtime=config_mtime,
+                started_time=summary['start_time'],
+                last_updated_time=summary['last_updated_time'],
                 last_pth_mtime=last_pth_mtime,
                 best_success_rate=best_success_rate_from_models_dir(models_dir),
             )
@@ -164,9 +162,9 @@ def is_complete(run: RunProgress) -> bool:
 
 
 def age_seconds(run: RunProgress, now: float) -> float | None:
-    if run.log_mtime is None:
+    if run.last_updated_time is None:
         return None
-    return max(0.0, now - run.log_mtime)
+    return max(0.0, now - run.last_updated_time)
 
 
 def format_age(seconds: float | None) -> str:
@@ -224,10 +222,8 @@ def format_status(run: RunProgress, now: float, active_within_seconds: int, colo
 def format_progress(run: RunProgress, width: int, now: float, active_within_seconds: int) -> str:
     current = run.current_epoch
     total = run.total_epochs
-    if run.config_mtime is None or run.last_pth_mtime is None:
-        elapsed = format_duration(None)
-    else:
-        elapsed = format_duration(run.last_pth_mtime - run.config_mtime)
+    elapsed = format_duration(run.last_updated_time - run.started_time)
+    
     if current is None or total is None or total <= 0:
         pct = "  ??.?%"
         epoch_text = "{}/{}".format(current if current is not None else "?", total if total is not None else "?")
@@ -241,7 +237,7 @@ def format_progress(run: RunProgress, width: int, now: float, active_within_seco
         else "?"
     )
 
-    return "{} {} {:>11}  {:>7}  {}  {:<20}  {:<10}  ({:<2})  {}".format(
+    return "{} {} {:>11}  {:>7}  {}  {:<25}  {:<10}  ({:<2})  {}".format(
         progress_bar(current, total, width),
         pct,
         epoch_text,
@@ -276,7 +272,7 @@ def main():
     parser.add_argument(
         "--width",
         type=int,
-        default=24,
+        default=16,
         help="progress bar width in characters",
     )
     parser.add_argument(
