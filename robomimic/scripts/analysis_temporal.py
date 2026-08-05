@@ -42,7 +42,7 @@ class ParsedDatasetInfo:
 
 @dataclass
 class AnalysisConfig:
-    task_names: list[str] = field(default_factory=lambda: ["can"])
+    task_names: list[str] = field(default_factory=lambda: ["lift", "can", "square"])
     dataset_split: str = "ph"
     control_frequency_hz: float = 20.0
     rollout_sampling_mode: str = "all" # "sample", "firstN", or "all"
@@ -88,14 +88,16 @@ matplotlib.rcParams.update({
 #####################
 ## DEFAULT CONFIGS ##
 #####################
-
+DATASET_ROOT = str(Path(__file__).parent.parent.parent.absolute()) + "/"
 def default_robomimic_datasets(task_name: str, dataset_split: str) -> list[DatasetLocator]:
     return [
-        DatasetLocator(path=f"datasets/{task_name}/{dataset_split}/image_v15.hdf5", label="Demo", dataset_type=DatasetType.DEMO),
-        DatasetLocator(path=f"rollouts/{task_name}/{dataset_split}/bc/*.hdf5", label="BC", dataset_type=DatasetType.BASELINE),
-        DatasetLocator(path=f"rollouts/{task_name}/{dataset_split}/bc_rnn/*.hdf5", label="BC-RNN", dataset_type=DatasetType.BASELINE),
-        DatasetLocator(path=f"rollouts/{task_name}/{dataset_split}/diffusion_policy/*.hdf5", label="DP", dataset_type=DatasetType.BASELINE),
-        DatasetLocator(path=f"rollouts/{task_name}/{dataset_split}/tc_diffusion_policy/*.hdf5", label="TC-DP", dataset_type=DatasetType.INFERENCE),
+        DatasetLocator(path=DATASET_ROOT+f"datasets/{task_name}/{dataset_split}/image_v15.hdf5", label="Demo", dataset_type=DatasetType.DEMO),
+        DatasetLocator(path=DATASET_ROOT+f"rollouts/{task_name}/{dataset_split}/bc/*.hdf5", label="BC", dataset_type=DatasetType.BASELINE),
+        DatasetLocator(path=DATASET_ROOT+f"rollouts/{task_name}/{dataset_split}/bc_rnn/*.hdf5", label="BC-RNN", dataset_type=DatasetType.BASELINE),
+        DatasetLocator(path=DATASET_ROOT+f"rollouts/{task_name}/{dataset_split}/diffusion_policy_mod/*.hdf5", label="DP", dataset_type=DatasetType.BASELINE),
+        DatasetLocator(path=DATASET_ROOT+f"rollouts/{task_name}/{dataset_split}/tc_diffusion_policy_mod/*.hdf5", label="TC-DP", dataset_type=DatasetType.INFERENCE),
+        # DatasetLocator(path=DATASET_ROOT+f"rollouts/{task_name}/{dataset_split}/diffusion_policy/*.hdf5", label="DP (robomimic default)", dataset_type=DatasetType.BASELINE),
+        # DatasetLocator(path=DATASET_ROOT+f"rollouts/{task_name}/{dataset_split}/tc_diffusion_policy/*.hdf5", label="TC-DP (robomimic default)", dataset_type=DatasetType.INFERENCE),
     ]
 
 

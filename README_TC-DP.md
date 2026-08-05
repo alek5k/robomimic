@@ -55,25 +55,25 @@ Replace ALGO below with:
 bc, bc_rnn, diffusion_policy and tc_diffusion_policy.
 
 ```bash
-conda activate robomimic
-ENV=can
+conda activate robomimic2 && cd ~/Repos/robomimic
+ENV=lift
 SPLIT=ph
-ALGO=bc
-GPU=0
+ALGO=tc_diffusion_policy_mod
+GPU=1
 for SEED in 1 2 3; do
     CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/${ENV}/${SPLIT}/image/${ALGO}.json --seed=${SEED}
 done
 ```
-
+ 
 ### Evaluations
 Replace with your RUN_ID generated during training.
 ```bash
-conda activate robomimic
-for RUN_ID in 20260503212530 20260504194247 20260505175124; do
+conda activate robomimic2 && cd ~/Repos/robomimic
+for RUN_ID in 20260715120741 20260716000116 20260716105927; do
     N_ROLLOUTS=100
-    ENV=square
-    ALGO=tc_diffusion_policy
-    GPU=0
+    ENV=lift
+    ALGO=tc_diffusion_policy_mod
+    GPU=1
     SPLIT=ph
     SEED=$((RUN_ID % 4294967295))
     BASE="trained_models/temporaldp/${ALGO}/${ENV}/${SPLIT}/image/trained_models/temporaldp_${ALGO}_${ENV}_${SPLIT}_image/${RUN_ID}"
