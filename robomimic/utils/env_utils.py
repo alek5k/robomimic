@@ -42,6 +42,9 @@ def get_env_class(env_meta=None, env_type=None, env=None):
     elif env_type == EB.EnvType.IG_MOMART_TYPE:
         from robomimic.envs.env_ig_momart import EnvGibsonMOMART
         return EnvGibsonMOMART
+    elif env_type == EB.EnvType.TEMPORAL_TYPE:
+        from robomimic.envs.env_temporal import EnvTemporal
+        return EnvTemporal
     raise Exception("code should never reach this point")
 
 

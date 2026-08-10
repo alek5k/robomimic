@@ -153,10 +153,13 @@ class SequenceDataset(torch.utils.data.Dataset):
             "saturating_progress_encoding",
             "sinusoidal_progress_encoding",
         }
+        # The robot velocity observations are only required to synthesize the
+        # optional idleness encoding. Loading them unconditionally breaks
+        # datasets (such as WaitAtGoal) that do not use robosuite key names.
         self.additional_keys_to_load = {
             "robot0_joint_vel",
             "robot0_gripper_qvel",
-        }
+        } if "idleness" in self.obs_keys else set()
         self.obs_keys_in_file = [k for k in self.obs_keys if k not in self.synthetic_obs_keys]
         self.obs_keys_in_file += list(self.additional_keys_to_load)
 
