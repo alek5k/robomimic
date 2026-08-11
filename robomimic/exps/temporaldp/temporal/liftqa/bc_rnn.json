@@ -62,7 +62,7 @@
     ],
     "action_config": {
       "actions": {
-        "normalization": null
+        "normalization": "min_max"
       }
     },
     "goal_mode": null,

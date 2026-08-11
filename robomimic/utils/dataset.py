@@ -153,13 +153,19 @@ class SequenceDataset(torch.utils.data.Dataset):
             "saturating_progress_encoding",
             "sinusoidal_progress_encoding",
         }
-        # The robot velocity observations are only required to synthesize the
-        # optional idleness encoding. Loading them unconditionally breaks
-        # datasets (such as WaitAtGoal) that do not use robosuite key names.
-        self.additional_keys_to_load = {
-            "robot0_joint_vel",
-            "robot0_gripper_qvel",
-        } if "idleness" in self.obs_keys else set()
+        # The idleness encoding needs one auxiliary velocity signal. Native
+        # temporal datasets provide it directly, while legacy robosuite data
+        # derives it from joint and gripper velocities.
+        self.additional_keys_to_load = set()
+        if "idleness" in self.obs_keys:
+            first_obs = self.hdf5_file["data/{}/obs".format(self.demos[0])]
+            if "agent_velocity" in first_obs:
+                self.additional_keys_to_load.add("agent_velocity")
+            else:
+                self.additional_keys_to_load.update({
+                    "robot0_joint_vel",
+                    "robot0_gripper_qvel",
+                })
         self.obs_keys_in_file = [k for k in self.obs_keys if k not in self.synthetic_obs_keys]
         self.obs_keys_in_file += list(self.additional_keys_to_load)
 
@@ -208,6 +214,9 @@ class SequenceDataset(torch.utils.data.Dataset):
 
     def _compute_agent_velocity_from_obs(self, obs_dict):
         # obs_dict: dict of arrays shaped (T, D)
+        if "agent_velocity" in obs_dict:
+            velocity = np.asarray(obs_dict["agent_velocity"], dtype=np.float32)
+            return velocity.reshape(velocity.shape[0], -1)[:, :1]
         joint = obs_dict["robot0_joint_vel"]
         gripper = obs_dict["robot0_gripper_qvel"]
         mag_joint = np.linalg.norm(joint, axis=-1)

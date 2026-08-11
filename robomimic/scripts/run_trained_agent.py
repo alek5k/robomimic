@@ -57,6 +57,7 @@ import h5py
 import imageio
 import numpy as np
 from copy import deepcopy
+from pathlib import Path
 
 import torch
 
@@ -222,6 +223,7 @@ def run_trained_agent(args):
     # maybe open hdf5 to write rollouts
     write_dataset = (args.dataset_path is not None)
     if write_dataset:
+        Path(args.dataset_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
         data_writer = h5py.File(args.dataset_path, "w")
         data_grp = data_writer.create_group("data")
         total_samples = 0
@@ -369,4 +371,3 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     run_trained_agent(args)
-

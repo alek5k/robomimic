@@ -1,10 +1,12 @@
 """Convert TemporalDiffusionPolicy Zarr demonstrations to robomimic HDF5.
 
-The conversion is deliberately narrow: it exports the observations used by
-the image baselines (``full_image`` and ``agent_pose``) and the recorded
-actions. Source images are float CHW values in [0, 1]; robomimic's standard
-image path expects uint8 HWC values, so they are restored to their original
-8-bit pixels. No source Zarr data is modified.
+The conversion preserves every source ``data/*`` array in each HDF5 episode's
+``source_data`` group, as well as every ``meta/*`` array in ``source_meta``.
+It additionally writes the Robomimic-compatible observations, actions,
+rewards, and terminal flags required for training. Source images are float
+CHW values in [0, 1]; robomimic's standard image path expects uint8 HWC
+values, so they are restored to their original 8-bit pixels. No source Zarr
+data is modified.
 """
 import argparse
 import json
@@ -67,6 +69,13 @@ def _write_array(group, name, values, compression):
     group.create_dataset(name, data=values, compression=compression, shuffle=True)
 
 
+def _copy_source_meta(source_root, output, compression):
+    """Preserve every source meta array at the HDF5 root."""
+    source_meta = output.create_group("source_meta")
+    for key in source_root["meta"].keys():
+        _write_array(source_meta, key, np.asarray(source_root["meta"][key][:]), compression)
+
+
 def _environment_metadata(source_root, task, images):
     """Metadata consumed by :class:`robomimic.envs.env_temporal.EnvTemporal`."""
     spec = TASK_SPECS[task]
@@ -115,6 +124,7 @@ def verify(source_path, output_path, task, val_ratio=0.02, split_seed=42):
     source_actions = source["data/action"]
     source_poses = source["data/agent_pose"]
     source_images = source["data/full_image"]
+    source_velocities = source["data/agent_velocity"]
     expected_env_args = _environment_metadata(source, task, source_images)
     with h5py.File(output_path, "r") as output:
         actual_env_args = json.loads(output["data"].attrs["env_args"])
@@ -140,11 +150,21 @@ def verify(source_path, output_path, task, val_ratio=0.02, split_seed=42):
                 raise AssertionError(f"Action mismatch in {demo_name}")
             if not np.array_equal(demo["obs/agent_pose"][:], source_poses[start:stop].astype(np.float32)):
                 raise AssertionError(f"Agent-pose mismatch in {demo_name}")
+            expected_velocity = np.asarray(source_velocities[start:stop], dtype=np.float32).reshape(-1, 1)
+            if not np.array_equal(demo["obs/agent_velocity"][:], expected_velocity):
+                raise AssertionError(f"Agent-velocity mismatch in {demo_name}")
             expected_images = _read_source_images(source_images, start, stop)
             if not np.array_equal(demo["obs/image"][:], expected_images):
                 raise AssertionError(f"Image round-trip mismatch in {demo_name}")
             if not demo["dones"][-1]:
                 raise AssertionError(f"Final action is not terminal in {demo_name}")
+            for key in source["data"].keys():
+                if not np.array_equal(demo["source_data"][key][:], source["data"][key][start:stop]):
+                    raise AssertionError(f"Source-data mismatch for {key!r} in {demo_name}")
+
+        for key in source["meta"].keys():
+            if not np.array_equal(output["source_meta"][key][:], source["meta"][key][:]):
+                raise AssertionError(f"Source-meta mismatch for {key!r}")
 
     return {
         "episodes": len(episode_ends),
@@ -172,7 +192,7 @@ def convert(source_path, output_path, task, val_ratio=0.02, split_seed=42, image
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     root = zarr.open_group(str(source_path), mode="r")
-    for key in ("action", "agent_pose", "full_image"):
+    for key in ("action", "agent_pose", "agent_velocity", "full_image"):
         if key not in root["data"]:
             raise KeyError(f"Missing data/{key} in {source_path}")
     episode_ends = np.asarray(root["meta/episode_ends"][:], dtype=np.int64)
@@ -182,16 +202,25 @@ def convert(source_path, output_path, task, val_ratio=0.02, split_seed=42, image
     spec = TASK_SPECS[task]
     actions = root["data/action"]
     poses = root["data/agent_pose"]
+    velocities = root["data/agent_velocity"]
     images = root["data/full_image"]
     if actions.shape[1:] != (spec["expected_action_dim"],):
         raise ValueError(f"Expected {spec['expected_action_dim']}-D actions, got {actions.shape[1:]}")
     if poses.shape[1:] != (spec["expected_pose_dim"],):
         raise ValueError(f"Expected {spec['expected_pose_dim']}-D poses, got {poses.shape[1:]}")
+    if velocities.shape[0] != actions.shape[0]:
+        raise ValueError("agent_velocity and actions do not agree on transition count")
     if episode_ends[-1] != actions.shape[0] or poses.shape[0] != actions.shape[0] or images.shape[0] != actions.shape[0]:
         raise ValueError("Source arrays and episode_ends do not agree on transition count")
 
     source_rewards = root["data/reward"] if "reward" in root["data"] else None
     source_dones = root["data/done"] if "done" in root["data"] else None
+    source_data_keys = list(root["data"].keys())
+    for key in source_data_keys:
+        if root["data"][key].shape[0] != actions.shape[0]:
+            raise ValueError(
+                f"data/{key} has {root['data'][key].shape[0]} transitions, expected {actions.shape[0]}"
+            )
     env_args = _environment_metadata(root, task, images)
 
     try:
@@ -201,6 +230,7 @@ def convert(source_path, output_path, task, val_ratio=0.02, split_seed=42, image
             data_group.attrs["temporal_source_zarr"] = str(source_path)
             data_group.attrs["temporal_task"] = task
             data_group.attrs["temporal_source_attrs"] = json.dumps(dict(root.attrs), sort_keys=True, default=str)
+            _copy_source_meta(root, output, compression)
 
             start = 0
             demo_names = []
@@ -214,6 +244,13 @@ def convert(source_path, output_path, task, val_ratio=0.02, split_seed=42, image
                 demo.attrs["source_start"] = start
                 demo.attrs["source_end"] = stop
                 obs = demo.create_group("obs")
+                source_data = demo.create_group("source_data")
+
+                for key in source_data_keys:
+                    values = np.asarray(root["data"][key][start:stop])
+                    _write_array(source_data, key, values, compression)
+                    if key not in {"action", "reward", "done", "full_image", "agent_pose", "agent_velocity"}:
+                        _write_array(obs, key, values, compression)
 
                 image_shape = (length, images.shape[2], images.shape[3], images.shape[1])
                 image_chunks = (min(image_chunk, length),) + image_shape[1:]
@@ -226,6 +263,12 @@ def convert(source_path, output_path, task, val_ratio=0.02, split_seed=42, image
                     destination[batch_start - start:batch_stop - start] = _read_source_images(images, batch_start, batch_stop)
 
                 _write_array(obs, "agent_pose", np.asarray(poses[start:stop], dtype=np.float32), compression)
+                _write_array(
+                    obs,
+                    "agent_velocity",
+                    np.asarray(velocities[start:stop], dtype=np.float32).reshape(-1, 1),
+                    compression,
+                )
                 _write_array(demo, "actions", np.asarray(actions[start:stop], dtype=np.float32), compression)
                 rewards = np.zeros(length, dtype=np.float32) if source_rewards is None else np.asarray(source_rewards[start:stop], dtype=np.float32)
                 _write_array(demo, "rewards", rewards, compression)

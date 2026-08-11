@@ -45,6 +45,7 @@ setup(
             "opencv-python>=4.6",
             "scipy>=1.9",
             "scikit-image>=0.19",
+            "zarr<3",
             "robosuite @ git+https://github.com/ARISE-Initiative/robosuite.git@95743f6687ad7394ccb6e865fa4e1b99114e580d",
         ],
     },

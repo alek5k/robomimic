@@ -103,10 +103,16 @@ class EnvTemporal(EB.EnvBase):
         return np.ascontiguousarray(image)
 
     def _convert_observation(self, raw_obs):
-        return {
-            "image": self._image_to_uint8_hwc(raw_obs["full_image"]),
-            "agent_pose": np.asarray(raw_obs["agent_pose"], dtype=np.float32).copy(),
+        # Preserve all native fields for rollout diagnostics. Policies still
+        # consume only the keys listed in their saved observation config.
+        observation = {
+            key: np.asarray(value).copy()
+            for key, value in raw_obs.items()
         }
+        observation["image"] = self._image_to_uint8_hwc(raw_obs["full_image"])
+        observation["agent_pose"] = np.asarray(raw_obs["agent_pose"], dtype=np.float32).copy()
+        observation["agent_velocity"] = np.asarray(raw_obs["agent_velocity"], dtype=np.float32).reshape(1)
+        return observation
 
     def _set_current_observation(self, raw_obs):
         self._current_raw_obs = raw_obs

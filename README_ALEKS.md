@@ -50,6 +50,26 @@ Note: the datasets are specified in the config file, so no need to pass explicit
 ## Training
 BC, BC-RNN, DP and TCDP
 
+### Interactive train / evaluation launcher
+robomimic_cli
+
+Run this from the appropriate conda environment. It discovers the available
+TemporalDP configs, prompts for environment, algorithm, GPU, and seed, and
+finds timestamped checkpoints for evaluation. After each job it offers to run
+another one.
+
+```bash
+python robomimic/scripts/experiment_cli.py
+```
+
+Use `--dry-run` to inspect the constructed command without launching it.
+Seeds may be entered as a comma-separated list (for example, `1,2,3`) and
+will run sequentially on the selected GPU.
+The same menu can run `check_progress.py` or `check_progress_rollout.py`, and
+can show a numbered training-progress list for deletion. Active runs are
+protected; stale or completed runs can be selected with comma-separated
+numbers, then require retyping their comma-separated timestamps.
+
 Single seed:
 ```bash
 ENV=square
@@ -116,6 +136,32 @@ for RUN_ID in 20260511134003 20260512121109 20260512121147; do
     printf "RUN_ID=%s\nSEED=%s\nN_ROLLOUTS=%s\nENV=%s\nALGO=%s\nGPU=%s\nSPLIT=%s\nBASE=%s\nAGENT=%s\nNAME=%s\nDATASET=%s\n" "$RUN_ID" "$SEED" "$N_ROLLOUTS" "$ENV" "$ALGO" "$GPU" "$SPLIT" "$BASE" "$AGENT" "$NAME" "$DATASET" > "$INFO"
 
     gorobomimic && CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/run_trained_agent.py --agent="$AGENT" --dataset_path="$DATASET" --n_rollouts=${N_ROLLOUTS} --seed=${SEED} --dataset_obs
+done
+```
+
+## WaitAtGoal and LiftQA
+BC:
+conda activate robomimic2_temporalenvs && cd /home/sydney1/Repos/robomimic && export MUJOCO_GL=egl SDL_VIDEODRIVER=dummy NUMBA_DISABLE_JIT=1
+
+python robomimic/scripts/train.py \
+  --config robomimic/exps/temporaldp/temporal/waitatgoal/bc_mod_nocrop.json
+
+```bash
+ENV=liftqa
+ALGO=bc_rnn_mod_nocrop
+GPU=0
+for SEED in 1 2 3; do
+    conda activate robomimic2_temporalenvs && cd /home/sydney1/Repos/robomimic && export MUJOCO_GL=egl SDL_VIDEODRIVER=dummy NUMBA_DISABLE_JIT=1 && CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/temporal/${ENV}/${ALGO}.json --seed=${SEED}
+done
+```
+
+DP and TC-DP
+```bash
+ENV=waitatgoal
+ALGO=tc_diffusion_policy_mod_nocrop
+GPU=1
+for SEED in 1 2 3; do
+    conda activate robomimic2_temporalenvs && cd /home/sydney1/Repos/robomimic && export MUJOCO_GL=egl SDL_VIDEODRIVER=dummy NUMBA_DISABLE_JIT=1 && CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/temporal/${ENV}/${ALGO}.json --seed=${SEED}
 done
 ```
 

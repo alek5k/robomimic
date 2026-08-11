@@ -1,7 +1,7 @@
 {
   "algo_name": "bc",
   "experiment": {
-    "name": "temporaldp_bc_rnn_waitatgoal_image",
+    "name": "temporaldp_bc_nocrop_waitatgoal_image",
     "validate": true,
     "logging": {
       "terminal_output_to_txt": true,
@@ -39,7 +39,7 @@
   },
   "train": {
     "data": "datasets/temporal/waitatgoal_image.hdf5",
-    "output_dir": "../trained_models/temporaldp/bc_rnn/temporal/waitatgoal/image/trained_models",
+    "output_dir": "../trained_models/temporaldp/bc_nocrop/temporal/waitatgoal/image/trained_models",
     "normalize_weights_by_ds_size": false,
     "num_data_workers": 0,
     "hdf5_cache_mode": "low_dim",
@@ -48,7 +48,7 @@
     "hdf5_normalize_obs": false,
     "hdf5_filter_key": "train",
     "hdf5_validation_filter_key": "valid",
-    "seq_length": 10,
+    "seq_length": 1,
     "pad_seq_length": true,
     "frame_stack": 1,
     "pad_frame_stack": true,
@@ -92,7 +92,10 @@
       "l1_weight": 0.0,
       "cos_weight": 0.0
     },
-    "actor_layer_dims": [],
+    "actor_layer_dims": [
+      1024,
+      1024
+    ],
     "gaussian": {
       "enabled": false,
       "fixed_std": false,
@@ -144,9 +147,9 @@
       ]
     },
     "rnn": {
-      "enabled": true,
+      "enabled": false,
       "horizon": 10,
-      "hidden_dim": 1000,
+      "hidden_dim": 400,
       "rnn_type": "LSTM",
       "num_layers": 2,
       "open_loop": false,
@@ -213,13 +216,8 @@
             "noise_std": 0.0
           }
         },
-        "obs_randomizer_class": "CropRandomizer",
-        "obs_randomizer_kwargs": {
-          "crop_height": 76,
-          "crop_width": 76,
-          "num_crops": 1,
-          "pos_enc": false
-        }
+        "obs_randomizer_class": null,
+        "obs_randomizer_kwargs": {}
       },
       "depth": {
         "core_class": "VisualCore",

@@ -45,8 +45,10 @@ class TestTemporalEnvironmentParity(unittest.TestCase):
                 self.assertEqual(observation["image"].shape, image_shape)
                 self.assertEqual(observation["image"].dtype, np.uint8)
                 self.assertEqual(observation["agent_pose"].shape, action_shape)
+                self.assertEqual(observation["agent_velocity"].shape, (1,))
                 next_observation, _, _, info = env.step(np.zeros(action_shape, dtype=np.float32))
                 self.assertEqual(next_observation["image"].shape, image_shape)
+                self.assertEqual(next_observation["agent_velocity"].shape, (1,))
                 self.assertIn("is_success", info)
             finally:
                 env.close()

@@ -34,22 +34,26 @@ class ParsedDatasetInfo:
     dataset_type: DatasetType = DatasetType.UNKNOWN
     short_label: str | None = None
     step_counts: list[float] | None = None
+    pause_durations: list[float] | None = None
     success_rate: float | None = None
     success_rate_ci95: float | None = None
+    W_pause: float | None = None
     W_episode: float | None = None
     W_total: float | None = None
 
 
 @dataclass
 class AnalysisConfig:
-    task_names: list[str] = field(default_factory=lambda: ["lift", "can", "square"])
-    dataset_split: str = "ph"
+    task_names: list[str] = field(default_factory=lambda: ["temporal"]) # "lift", "can", "square", 
+    dataset_split: str = "ph"  # Robomimic split for Lift / Can / Square (e.g. "ph" or "mh")
+    temporal_dataset_split: str = "waitatgoal"  # "waitatgoal" or "liftqa"
     control_frequency_hz: float = 20.0
     rollout_sampling_mode: str = "all" # "sample", "firstN", or "all"
     rollout_selection_mode: str = "combine" # "combine" or "best"
     rollout_sampling_seed: int = 2
     rollout_success_only: bool = False
     histogram_bins: int = 81
+    pause_histogram_bins: int = 81
     include_rankings: bool = False
     include_demo_dataset: bool = False
     generate_tex_tables: bool = True
@@ -65,7 +69,7 @@ class AnalysisConfig:
     demo_legend_label: str = "Demonstration Dataset"
 
 
-TASK_NAMES = {"can", "square", "lift", "tool_hang", "transport"}
+TASK_NAMES = {"can", "square", "lift", "tool_hang", "transport", "temporal"}
 
 font_size = 18
 legend_size = 14
@@ -90,6 +94,12 @@ matplotlib.rcParams.update({
 #####################
 DATASET_ROOT = str(Path(__file__).parent.parent.parent.absolute()) + "/"
 def default_robomimic_datasets(task_name: str, dataset_split: str) -> list[DatasetLocator]:
+    if task_name == "temporal":
+        return [
+            DatasetLocator(path=DATASET_ROOT + f"datasets/temporal/{dataset_split}_image.hdf5", label="Demo", dataset_type=DatasetType.DEMO),
+            DatasetLocator(path=DATASET_ROOT+f"rollouts/{task_name}/{dataset_split}/tc_diffusion_policy_mod_nocrop/*.hdf5", label="TC-DP", dataset_type=DatasetType.INFERENCE),
+        ]
+
     return [
         DatasetLocator(path=DATASET_ROOT+f"datasets/{task_name}/{dataset_split}/image_v15.hdf5", label="Demo", dataset_type=DatasetType.DEMO),
         DatasetLocator(path=DATASET_ROOT+f"rollouts/{task_name}/{dataset_split}/bc/*.hdf5", label="BC", dataset_type=DatasetType.BASELINE),
@@ -110,7 +120,7 @@ def print_table(datasets: list[ParsedDatasetInfo]):
 
     rows = []
     headers = [
-        "#", "label", "W_total", "W_episode", "success",
+        "#", "label", "W_total", "W_episode", "W_pause", "success",
         "path",
     ]
 
@@ -120,6 +130,7 @@ def print_table(datasets: list[ParsedDatasetInfo]):
             d.short_label,
             d.W_total,
             d.W_episode,
+            d.W_pause,
             d.success_rate,
             d.path,
         ])
@@ -130,13 +141,14 @@ def print_table(datasets: list[ParsedDatasetInfo]):
 def create_tex_table_from_results(
     results: dict[str, ParsedDatasetInfo],
     env_order: list[str],
-    dataset_split: str,
+    dataset_splits: dict[str, str],
     include_success: bool = False,
 ):
     task_titles = {
         "can": "Can",
         "square": "Square",
         "lift": "Lift",
+        "temporal": "Temporal",
         "tool_hang": "Tool Hang",
         "transport": "Transport",
     }
@@ -195,7 +207,7 @@ def create_tex_table_from_results(
     header = " & ".join(metric_headers[m] for m in metrics)
     colspec = "l" + "c" * (len(metrics) * len(env_order))
     env_headers = " & ".join(
-        rf"\multicolumn{{{len(metrics)}}}{{c}}{{\textbf{{{task_titles.get(env, env)} ({dataset_split.upper()})}}}}"
+        rf"\multicolumn{{{len(metrics)}}}{{c}}{{\textbf{{{task_titles.get(env, env)} ({dataset_splits[env].upper()})}}}}"
         for env in env_order
     )
     cmidrules = " ".join(
@@ -281,12 +293,44 @@ def extract_episode_metrics(
     return lengths, successes
 
 
+def extract_pause_durations(dataset_path: str) -> list[float] | None:
+    """Return the longest completed goal pause for each temporal episode.
+
+    This uses the same maximum-per-visit metric as
+    TemporalDiffusionPolicy's ``analysis_waittime.py``: brief goal visits do
+    not dilute a genuine completed pause.
+    """
+    with h5py.File(dataset_path, "r") as f:
+        pause_durations: list[float] = []
+        demos = sorted(f["data"].keys(), key=lambda name: int(name.split("_")[-1]))
+        for demo_name in demos:
+            demo = f["data"][demo_name]
+            obs = demo.get("obs", demo)
+            wait_times_group = obs if "wait_times_each_visit" in obs else demo
+            if "wait_times_each_visit" in wait_times_group:
+                completed_visits = np.asarray(wait_times_group["wait_times_each_visit"][-1], dtype=float)
+                completed_visits = completed_visits[completed_visits >= 0]
+                pause_duration = float(np.max(completed_visits)) if completed_visits.size else 0.0
+            elif "wait_time" in obs:
+                pause_duration = float(np.max(np.asarray(obs["wait_time"][:], dtype=float)))
+            elif "wait_time" in demo:
+                pause_duration = float(np.max(np.asarray(demo["wait_time"][:], dtype=float)))
+            else:
+                raise KeyError(
+                    f"{dataset_path}:{demo_name} has neither 'wait_times_each_visit' nor 'wait_time'."
+                )
+            pause_durations.append(pause_duration)
+    return pause_durations
+
+
 def count_dataset_episodes(dataset_path: str) -> int:
     with h5py.File(dataset_path, "r") as f:
         return len(f["data"])
 
 
 def resolve_horizon(task_name: str, dataset_split: str) -> int:
+    if task_name == "temporal":
+        return 400
     if dataset_split == "ph" and task_name in {"can", "square", "lift"}:
         return 400
     if task_name == "transport":
@@ -317,7 +361,15 @@ def main(cfg: AnalysisConfig):
             f"task_names must be drawn from {sorted(TASK_NAMES)}, got invalid entries {invalid_task_names!r}"
         )
     if cfg.dataset_split not in {"mh", "ph"}:
-        raise ValueError("dataset_split must be 'mh' or 'ph', got {!r}".format(cfg.dataset_split))
+        raise ValueError(
+            "dataset_split must be a Robomimic split such as 'ph' or 'mh', got {!r}".format(cfg.dataset_split)
+        )
+    if cfg.temporal_dataset_split not in {"waitatgoal", "liftqa"}:
+        raise ValueError(
+            "temporal_dataset_split must be 'waitatgoal' or 'liftqa', got {!r}".format(
+                cfg.temporal_dataset_split
+            )
+        )
     if cfg.rollout_sampling_mode not in {"firstN", "sample", "all"}:
         raise ValueError(
             "rollout_sampling_mode must be 'firstN', 'sample', or 'all', got {!r}".format(cfg.rollout_sampling_mode)
@@ -328,23 +380,32 @@ def main(cfg: AnalysisConfig):
         )
     all_parsed_datasets = {}
     dataset_types = {DatasetType.DEMO, DatasetType.BASELINE, DatasetType.INFERENCE}
+    dataset_splits = {}
 
     for task_name in cfg.task_names:
-        datasets = default_robomimic_datasets(task_name, cfg.dataset_split)
+        task_dataset_split = cfg.temporal_dataset_split if task_name == "temporal" else cfg.dataset_split
+        dataset_splits[task_name] = task_dataset_split
+        datasets = default_robomimic_datasets(task_name, task_dataset_split)
         parsed_datasets = parse_datasets(cfg, task_name, select_datasets_by_type(datasets, dataset_types))
         all_parsed_datasets.update(parsed_datasets)
         generate_graphs(
             cfg,
             task_name,
             parsed_datasets,
-            save_prefix=f"robomimic_{task_name}_{cfg.dataset_split}",
+            save_prefix=f"robomimic_{task_name}_{task_dataset_split}",
         )
+        if task_name == "temporal":
+            generate_pause_duration_graph(
+                cfg,
+                parsed_datasets,
+                save_prefix=f"robomimic_{task_name}_{task_dataset_split}",
+            )
 
     if cfg.generate_tex_tables:
         create_tex_table_from_results(
             all_parsed_datasets,
             env_order=list(cfg.task_names),
-            dataset_split=cfg.dataset_split,
+            dataset_splits=dataset_splits,
             include_success=True,
         )
 
@@ -379,6 +440,7 @@ def parse_datasets(cfg: AnalysisConfig, task_name: str, datasets: list[DatasetLo
             )
             demo_step_counts = step_counts
             success_rate = success_rate_percent(success_flags)
+            pause_durations = extract_pause_durations(dataset.path) if task_name == "temporal" else None
             dataset_task_name = task_name_from_path(dataset.path)
             parsed_datasets[dataset.path] = ParsedDatasetInfo(
                 path=dataset.path,
@@ -387,6 +449,7 @@ def parse_datasets(cfg: AnalysisConfig, task_name: str, datasets: list[DatasetLo
                 task_name=dataset_task_name,
                 dataset_type=dataset.dataset_type,
                 step_counts=step_counts,
+                pause_durations=pause_durations,
                 success_rate=success_rate if success_rate is not None else 100.0,
                 success_rate_ci95=0.0,
             )
@@ -421,11 +484,13 @@ def parse_datasets(cfg: AnalysisConfig, task_name: str, datasets: list[DatasetLo
 
             rollout_task_name = task_name_from_path(rollout_path)
             success_rate = success_rate_percent(success_flags)
+            pause_durations = extract_pause_durations(rollout_path) if task_name == "temporal" else None
             wd = wasserstein_distance(np.asarray(step_counts, dtype=float), demo_step_counts_np) / cfg.control_frequency_hz
             rollout_candidates.append({
                 "path": rollout_path,
                 "task_name": rollout_task_name,
                 "step_counts": step_counts,
+                "pause_durations": pause_durations,
                 "success_rate": success_rate,
                 "wd": float(wd),
             })
@@ -453,6 +518,7 @@ def parse_datasets(cfg: AnalysisConfig, task_name: str, datasets: list[DatasetLo
                 task_name=selected["task_name"] or default_task_name,
                 dataset_type=dataset.dataset_type or DatasetType.UNKNOWN,
                 step_counts=selected["step_counts"],
+                pause_durations=selected["pause_durations"],
                 success_rate=selected["success_rate"],
                 success_rate_ci95=0.0 if selected["success_rate"] is not None else None,
                 W_episode=selected["wd"],
@@ -465,12 +531,18 @@ def parse_datasets(cfg: AnalysisConfig, task_name: str, datasets: list[DatasetLo
             continue
 
         combined_step_counts = []
+        combined_pause_durations = []
+        has_pause_durations = True
         rollout_success_rates = []
         combined_task_name = None
         for candidate in rollout_candidates:
             if combined_task_name is None:
                 combined_task_name = candidate["task_name"]
             combined_step_counts.extend(candidate["step_counts"])
+            if candidate["pause_durations"] is None:
+                has_pause_durations = False
+            else:
+                combined_pause_durations.extend(candidate["pause_durations"])
             if candidate["success_rate"] is not None:
                 rollout_success_rates.append(candidate["success_rate"])
 
@@ -487,6 +559,7 @@ def parse_datasets(cfg: AnalysisConfig, task_name: str, datasets: list[DatasetLo
             task_name=combined_task_name or default_task_name,
             dataset_type=dataset.dataset_type or DatasetType.UNKNOWN,
             step_counts=combined_step_counts,
+            pause_durations=combined_pause_durations if has_pause_durations else None,
             success_rate=success_rate_mean,
             success_rate_ci95=success_rate_ci95,
         )
@@ -507,12 +580,20 @@ def calculate_wasserstein_distances(
 
     demonstration_dataset = next(d for d in parsed_datasets.values() if d.is_demo_dataset)
     demo_steps = np.asarray(demonstration_dataset.step_counts, dtype=float)
+    demo_pause_durations = demonstration_dataset.pause_durations
 
     for dataset_path, parsed_info in parsed_datasets.items():
         step_counts = np.asarray(parsed_info.step_counts, dtype=float)
         w_distance_step = wasserstein_distance(step_counts, demo_steps) / control_frequency_hz
+        w_distance_pause = None
+        if demo_pause_durations is not None and parsed_info.pause_durations is not None:
+            w_distance_pause = wasserstein_distance(
+                np.asarray(parsed_info.pause_durations, dtype=float),
+                np.asarray(demo_pause_durations, dtype=float),
+            )
+        parsed_datasets[dataset_path].W_pause = w_distance_pause
         parsed_datasets[dataset_path].W_episode = w_distance_step
-        parsed_datasets[dataset_path].W_total = w_distance_step
+        parsed_datasets[dataset_path].W_total = w_distance_step + (w_distance_pause or 0.0)
 
 
 def generate_graphs(cfg: AnalysisConfig, task_name: str, parsed_datasets: dict[str, ParsedDatasetInfo], save_prefix: str):
@@ -629,6 +710,79 @@ def generate_graphs(cfg: AnalysisConfig, task_name: str, parsed_datasets: dict[s
     fig.subplots_adjust(hspace=cfg.h_space, wspace=cfg.w_space)
     png_path = output_dir / f"{save_prefix}_episode_length_analysis.png"
     pdf_path = output_dir / f"{save_prefix}_episode_length_analysis.pdf"
+    fig.savefig(png_path, dpi=300, bbox_inches="tight")
+    fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {png_path}")
+
+
+def generate_pause_duration_graph(
+    cfg: AnalysisConfig,
+    parsed_datasets: dict[str, ParsedDatasetInfo],
+    save_prefix: str,
+):
+    """Plot temporal pause-duration distributions against the demonstration data."""
+    output_dir = Path(__file__).resolve().parent / "analysis_temporal"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    demonstration_dataset = next(d for d in parsed_datasets.values() if d.is_demo_dataset)
+    if demonstration_dataset.pause_durations is None:
+        print("Skipping pause-duration analysis: the demonstration pause data is unavailable.")
+        return
+
+    rows_to_plot = [
+        info
+        for info in parsed_datasets.values()
+        if info.pause_durations is not None and (cfg.include_demo_dataset or not info.is_demo_dataset)
+    ]
+    if not rows_to_plot:
+        rows_to_plot = [demonstration_dataset]
+
+    all_pause_durations = [np.asarray(info.pause_durations, dtype=float) for info in rows_to_plot]
+    all_pause_durations.append(np.asarray(demonstration_dataset.pause_durations, dtype=float))
+    bins = np.histogram_bin_edges(np.concatenate(all_pause_durations), bins=cfg.pause_histogram_bins)
+    centers = 0.5 * (bins[:-1] + bins[1:])
+    widths = np.diff(bins)
+    reference_hist, _ = np.histogram(demonstration_dataset.pause_durations, bins=bins)
+
+    fig, axes = plt.subplots(
+        nrows=len(rows_to_plot),
+        ncols=1,
+        figsize=(cfg.subplot_width_scale, cfg.subplot_height_scale * len(rows_to_plot)),
+        sharex=True,
+        sharey=True,
+    )
+    axes = np.atleast_1d(axes)
+    from matplotlib.patches import Patch
+
+    cmap = plt.get_cmap("autumn")
+    for row, info in enumerate(rows_to_plot):
+        axis = axes[row]
+        color = cmap(1.0 - row / max(len(rows_to_plot) - 1, 1))
+        histogram, _ = np.histogram(info.pause_durations, bins=bins)
+        axis.bar(centers, histogram, width=widths, color=color, alpha=0.7, edgecolor="black", linewidth=0.5)
+        mask = reference_hist != 0
+        axis.bar(centers[mask], reference_hist[mask], width=widths[mask], facecolor="none", edgecolor="blue")
+        axis.set_ylabel("Frequency", fontweight="bold")
+        for spine in ("top", "right"):
+            axis.spines[spine].set_visible(False)
+
+        w_pause = info.W_pause or 0.0
+        axis.legend(
+            handles=[
+                Patch(facecolor=color, edgecolor="black", alpha=0.7, label=f"{info.short_label}, $W_{{pause}}={w_pause:.2f}$"),
+                Patch(facecolor="none", edgecolor="blue", linewidth=1.5, label=cfg.demo_legend_label),
+            ],
+            loc="upper right",
+        )
+        if row == len(rows_to_plot) - 1:
+            axis.set_xlabel("Agent pause time at goal (seconds)", fontweight="bold")
+        else:
+            axis.tick_params(axis="x", which="both", bottom=False, top=False, labelbottom=False)
+
+    fig.subplots_adjust(hspace=cfg.h_space)
+    png_path = output_dir / f"{save_prefix}_pause_duration_analysis.png"
+    pdf_path = output_dir / f"{save_prefix}_pause_duration_analysis.pdf"
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
     fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
     plt.close(fig)

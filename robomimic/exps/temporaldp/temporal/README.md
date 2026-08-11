@@ -1,4 +1,4 @@
-# Temporal environment BC baselines
+# Temporal environment baselines
 
 Install the optional environment dependencies before using train-time rollouts:
 
@@ -22,25 +22,64 @@ python robomimic/scripts/conversion/zarr_to_temporal_hdf5.py \
   --output datasets/temporal/liftqa_image.hdf5
 ```
 
-The twelve configs enable robomimic's standard train-time rollout loop through
+The twenty configs enable robomimic's standard train-time rollout loop through
 the native `EnvTemporal` adapter. It applies the LiftQA 3-D-to-7-D action map,
 uses the tasks' final completion criterion for success, and supplies robomimic
 with uint8 HWC images.
 
 Every conversion verifies its schema, LDP-compatible split, actions, poses,
-terminal flags, and pixel round-trip before reporting success. Re-check an
-existing output without rewriting it by adding `--verify` to the same command.
+native velocity, terminal flags, and pixel round-trip before reporting
+success. Re-check an existing output without rewriting it by adding `--verify`
+to the same command.
 
 For each environment, the following variants are available:
 
 - `bc` / `bc_rnn`: the existing `can/ph/image` visual settings
   (SpatialSoftmax with a 76×76 random crop).
+- `bc_nocrop`: SpatialSoftmax with no crop.
 - `bc_mod` / `bc_rnn_mod`: SpatialMeanPool with the same crop.
 - `bc_mod_nocrop` / `bc_rnn_mod_nocrop`: SpatialMeanPool with no crop.
+- `diffusion_policy_mod`: Diffusion Policy with SpatialMeanPool, a 2-step
+  observation horizon, a 16-step prediction horizon, and min-max action
+  normalization.
+- `tc_diffusion_policy_mod`: the same Diffusion Policy architecture augmented
+  with native-velocity idleness and sinusoidal progress encodings.
+- `diffusion_policy_mod_nocrop` / `tc_diffusion_policy_mod_nocrop`: the same
+  respective Diffusion Policy variants with SpatialMeanPool and no crop.
+
+All temporal variants use min-max action normalization. This is required for
+the coordinate-valued WaitAtGoal actions and is also applied to LiftQA's
+three-dimensional controls.
 
 Train from the repository root, for example:
 
 ```bash
 python robomimic/scripts/train.py --config robomimic/exps/temporaldp/temporal/waitatgoal/bc.json
 python robomimic/scripts/train.py --config robomimic/exps/temporaldp/temporal/liftqa/bc_rnn_mod_nocrop.json
+python robomimic/scripts/train.py --config robomimic/exps/temporaldp/temporal/waitatgoal/diffusion_policy_mod.json
+python robomimic/scripts/train.py --config robomimic/exps/temporaldp/temporal/liftqa/tc_diffusion_policy_mod.json
 ```
+
+For a checkpoint-free integration test of a Diffusion Policy config, run one
+gradient update and one native rollout with a short DDIM schedule:
+
+```bash
+python robomimic/scripts/smoke_test_temporal_diffusion.py \
+  --config robomimic/exps/temporaldp/temporal/waitatgoal/tc_diffusion_policy_mod.json
+```
+
+## Browse trained-model metrics
+
+Use the native PyQt6 + Matplotlib explorer. It reads only saved `config.json`
+files and TensorBoard event logs—not the HDF5 training datasets—and caches the
+run index and decoded scalar series in memory. Click **Refresh run index** only
+after new logs are written to a slow trained-model drive.
+
+```bash
+pip install -e ".[metrics-ui]"
+python robomimic/scripts/model_metrics_qt.py --root ../trained_models
+```
+
+The selectors sit to the right of the plot. Add `--root` again to search an
+additional trained-model directory, or use `--print-catalog` to inspect what
+the explorer discovers without opening a window.
