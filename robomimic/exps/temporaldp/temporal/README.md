@@ -68,18 +68,3 @@ python robomimic/scripts/smoke_test_temporal_diffusion.py \
   --config robomimic/exps/temporaldp/temporal/waitatgoal/tc_diffusion_policy_mod.json
 ```
 
-## Browse trained-model metrics
-
-Use the native PyQt6 + Matplotlib explorer. It reads only saved `config.json`
-files and TensorBoard event logs—not the HDF5 training datasets—and caches the
-run index and decoded scalar series in memory. Click **Refresh run index** only
-after new logs are written to a slow trained-model drive.
-
-```bash
-pip install -e ".[metrics-ui]"
-python robomimic/scripts/model_metrics_qt.py --root ../trained_models
-```
-
-The selectors sit to the right of the plot. Add `--root` again to search an
-additional trained-model directory, or use `--print-catalog` to inspect what
-the explorer discovers without opening a window.
