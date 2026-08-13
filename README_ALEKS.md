@@ -42,6 +42,18 @@ python robomimic/scripts/generate_paper_configs.py
 `python robomimic/scripts/experiment_cli.py` or `rmcli` if defined in aliases
 robomimic_cli
 Use `--dry-run` to inspect the constructed command without launching it.
+Choose **Train then evaluate** to run every requested training seed in order,
+then evaluate each newly created checkpoint in order (for example,
+train/train/train followed by eval/eval/eval). Each training, evaluation, and
+analysis launch lets you choose foreground execution or a detached `screen`
+session. The batch action uses one screen session for the entire ordered
+workflow; attach with the session name printed by the launcher.
+The **Evaluate** action accepts one or more comma-separated timestamped runs
+and executes them in the order selected. Detached evaluation uses one screen
+session, so it preserves that same sequential order.
+Choose **Run analysis** to select `lift`, `can`, `square`, or `temporal`.
+Standard environments use the `ph` split; selecting `temporal` then prompts
+for `waitatgoal` or `liftqa`.
 
 ---
 
@@ -54,12 +66,14 @@ Note: the datasets are specified in the config file, so no need to pass explicit
 #### Robomimic environments
 
 ```bash
+conda activate robomimic2
+cd /home/sydney1/Repos/robomimic
 ENV=square
 SPLIT=ph
 ALGO=bc
 GPU=0
 for SEED in 1 2 3; do
-    gorobomimic && CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/${ENV}/${SPLIT}/image/${ALGO}.json --seed=${SEED}
+    CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/${ENV}/${SPLIT}/image/${ALGO}.json --seed=${SEED}
 done
 ```
 Env: {square, can, lift}
@@ -68,11 +82,13 @@ Algo: {bc, bc_rnn, diffusion_policy_mod, tc_diffusion_policy_mod}
 
 #### Temporal environments
 ```bash
+conda activate robomimic2_temporalenvs_mujoco350
+cd /home/sydney1/Repos/robomimic
 ENV=liftqa
 ALGO=bc_rnn_mod_nocrop
 GPU=0
 for SEED in 1 2 3; do
-    conda activate robomimic2_temporalenvs && cd /home/sydney1/Repos/robomimic && export MUJOCO_GL=egl SDL_VIDEODRIVER=dummy NUMBA_DISABLE_JIT=1 && CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/temporal/${ENV}/${ALGO}.json --seed=${SEED}
+    SDL_VIDEODRIVER=dummy NUMBA_DISABLE_JIT=1 CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/temporal/${ENV}/${ALGO}.json --seed=${SEED}
 done
 ```
 Env: {liftqa, waitatgoal}
@@ -86,6 +102,8 @@ Algo: {bc_mod_nocrop, bc_rnn_mod_nocrop, diffusion_policy_mod_nocrop, tc_diffusi
 
 #### Robomimic environments
 ```bash
+conda activate robomimic2
+cd /home/sydney1/Repos/robomimic
 for RUN_ID in 20260511134003 20260512121109 20260512121147; do
     N_ROLLOUTS=100
     ENV=square
@@ -100,11 +118,13 @@ for RUN_ID in 20260511134003 20260512121109 20260512121147; do
     INFO="rollouts/${ENV}/${SPLIT}/${ALGO}/${RUN_ID}_${NAME}_info.txt"
     mkdir -p "$(dirname "$INFO")"
     printf "RUN_ID=%s\nSEED=%s\nN_ROLLOUTS=%s\nENV=%s\nALGO=%s\nGPU=%s\nSPLIT=%s\nBASE=%s\nAGENT=%s\nNAME=%s\nDATASET=%s\n" "$RUN_ID" "$SEED" "$N_ROLLOUTS" "$ENV" "$ALGO" "$GPU" "$SPLIT" "$BASE" "$AGENT" "$NAME" "$DATASET" > "$INFO"
-    gorobomimic && CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/run_trained_agent.py --agent="$AGENT" --dataset_path="$DATASET" --n_rollouts=${N_ROLLOUTS} --seed=${SEED} --dataset_obs
+    CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/run_trained_agent.py --agent="$AGENT" --dataset_path="$DATASET" --n_rollouts=${N_ROLLOUTS} --seed=${SEED} --dataset_obs
 done
 ```
 #### Temporal environments
 ```bash
+conda activate robomimic2_temporalenvs_mujoco350
+cd /home/sydney1/Repos/robomimic
 for RUN_ID in 20260511134003 20260512121109 20260512121147; do
     N_ROLLOUTS=200
     ENV=temporal
@@ -119,7 +139,7 @@ for RUN_ID in 20260511134003 20260512121109 20260512121147; do
     INFO="rollouts/${ENV}/${SPLIT}/${ALGO}/${RUN_ID}_${NAME}_info.txt"
     mkdir -p "$(dirname "$INFO")"
     printf "RUN_ID=%s\nSEED=%s\nN_ROLLOUTS=%s\nENV=%s\nALGO=%s\nGPU=%s\nSPLIT=%s\nBASE=%s\nAGENT=%s\nNAME=%s\nDATASET=%s\n" "$RUN_ID" "$SEED" "$N_ROLLOUTS" "$ENV" "$ALGO" "$GPU" "$SPLIT" "$BASE" "$AGENT" "$NAME" "$DATASET" > "$INFO"
-    gorobomimic && CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/run_trained_agent.py --agent="$AGENT" --dataset_path="$DATASET" --n_rollouts=${N_ROLLOUTS} --seed=${SEED} --dataset_obs
+    SDL_VIDEODRIVER=dummy NUMBA_DISABLE_JIT=1 CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/run_trained_agent.py --agent="$AGENT" --dataset_path="$DATASET" --n_rollouts=${N_ROLLOUTS} --seed=${SEED} --dataset_obs
 done
 ```
 
@@ -133,4 +153,3 @@ robomimic/algo/algo.py needs to be patched, so `postprocess_batch_for_training` 
 obs_keys = ["obs", "next_obs", "goal_obs", "subgoals", "target_subgoals"]
 
 segfault encountered -> set num_data_workers to 0
-

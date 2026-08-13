@@ -13,11 +13,13 @@ from datetime import datetime
 TRAIN_EPOCH_RE = re.compile(r"\bTrain Epoch\s+(\d+)\b")
 SUCCESS_RE = re.compile(r"_success_([0-9]+(?:\.[0-9]+)?)\.pth$")
 TASK_ORDER = ["can", "square", "lift", "tool_hang", "transport"]
-ALGO_ORDER = ["bc", "bc_rnn", "hbc", "diffusion_policy", "diffusion_policy_mod", "tc_diffusion_policy", "tc_diffusion_policy_mod"]
-DATASET_TYPE_ORDER = ["ph", "mh"]
+ALGO_ORDER = ["bc", "bc_mod_nocrop", "bc_rnn", "bc_rnn_mod_nocrop", "hbc", "diffusion_policy", "diffusion_policy_mod", "diffusion_policy_mod_nocrop", "tc_diffusion_policy", "tc_diffusion_policy_mod", "tc_diffusion_policy_mod_nocrop"]
+DATASET_TYPE_ORDER = ["ph", "mh", "waitatgoal", "liftqa"]
 ANSI_GREEN = "\033[32m"
 ANSI_BLUE = "\033[34m"
+ANSI_RED = "\033[31m"
 ANSI_RESET = "\033[0m"
+RUN_ID_RE = re.compile(r"^(\d{14})_")
 
 
 @dataclass
@@ -35,6 +37,7 @@ class RunProgress:
     started_time: float | None
     last_pth_mtime: float | None
     best_success_rate: float | None
+    evaluation_complete: bool = False
 
 
 def find_log_paths(root: Path) -> list[Path]:
@@ -90,6 +93,29 @@ def run_parts_from_path(run_dir: Path) -> tuple[str, str, str]:
         return "?", "?", "?"
 
 
+def training_summary_from_run(run_dir: Path, log_path: Path) -> dict:
+    """Read a usable training event file, or fall back to the text log."""
+    event_paths = sorted(run_dir.glob("**/*tfevents.*"), reverse=True)
+    for event_path in event_paths:
+        try:
+            return get_training_summary(str(event_path.absolute()))
+        except (KeyError, OSError, ValueError):
+            # A run can contain an incomplete event file, or a non-training
+            # writer such as a profiler. Keep looking rather than aborting the
+            # report for every other run.
+            continue
+
+    try:
+        log_mtime = log_path.stat().st_mtime
+    except OSError:
+        log_mtime = None
+    return {
+        "max_steps": latest_train_epoch(log_path),
+        "start_time": log_mtime,
+        "last_updated_time": log_mtime,
+    }
+
+
 def collect_progress(root: Path) -> list[RunProgress]:
     runs = []
     for log_path in find_log_paths(root):
@@ -100,8 +126,7 @@ def collect_progress(root: Path) -> list[RunProgress]:
         config = load_config(config_path) if config_path.exists() else {}
         algo, task, dataset_type = run_parts_from_path(run_dir)
 
-        tensorboard_data_file = next(run_dir.glob("**/*tfevents.*"))
-        summary = get_training_summary(str(tensorboard_data_file.absolute()))
+        summary = training_summary_from_run(run_dir, log_path)
 
 
         try:
@@ -141,6 +166,31 @@ def best_success_rate_from_models_dir(models_dir: Path) -> float | None:
         if best is None or success > best:
             best = success
     return best
+
+
+def completed_evaluation_run_ids(rollouts_root: Path, now: float, active_within_seconds: int) -> set[str]:
+    """Return run ids with a rollout HDF that is no longer actively changing.
+
+    This follows ``check_progress_rollout.py``: a rollout is active while its
+    HDF was modified within ``active_within_seconds`` and complete otherwise.
+    """
+    if not rollouts_root.exists():
+        return set()
+
+    completed = set()
+    rollout_paths = list(rollouts_root.glob("**/*.hdf"))
+    rollout_paths.extend(rollouts_root.glob("**/*.hdf5"))
+    for rollout_path in rollout_paths:
+        match = RUN_ID_RE.match(rollout_path.name)
+        if match is None:
+            continue
+        try:
+            age = max(0.0, now - rollout_path.stat().st_mtime)
+        except OSError:
+            continue
+        if age > active_within_seconds:
+            completed.add(match.group(1))
+    return completed
 
 
 def progress_bar(current: int | None, total: int | None, width: int) -> str:
@@ -207,6 +257,10 @@ def colorize(text: str, status: str, color: bool) -> str:
         return "{}{}{}".format(ANSI_GREEN, text, ANSI_RESET)
     if status == "active":
         return "{}{}{}".format(ANSI_BLUE, text, ANSI_RESET)
+    if status == "no":
+        return "{}{}{}".format(ANSI_RED, text, ANSI_RESET)
+    if status == "yes":
+        return "{}{}{}".format(ANSI_GREEN, text, ANSI_RESET)
     return text
 
 
@@ -219,16 +273,22 @@ def format_status(run: RunProgress, now: float, active_within_seconds: int, colo
     return colorize(text.ljust(width), status=status, color=color)
 
 
-def format_progress(run: RunProgress, width: int, now: float, active_within_seconds: int) -> str:
+def progress_cells(
+    run: RunProgress,
+    now: float,
+    active_within_seconds: int,
+    show_progress_bar: bool,
+    width: int,
+) -> list[str]:
     current = run.current_epoch
     total = run.total_epochs
     elapsed = format_duration(run.last_updated_time - run.started_time)
-    
+
     if current is None or total is None or total <= 0:
-        pct = "  ??.?%"
+        pct = "??.?%"
         epoch_text = "{}/{}".format(current if current is not None else "?", total if total is not None else "?")
     else:
-        pct = "{:6.1f}%".format(100.0 * min(current / total, 1.0))
+        pct = "{:.1f}%".format(100.0 * min(current / total, 1.0))
         epoch_text = "{}/{}".format(current, total)
 
     success_text = (
@@ -237,17 +297,79 @@ def format_progress(run: RunProgress, width: int, now: float, active_within_seco
         else "?"
     )
 
-    return "{} {} {:>11}  {:>7}  {}  {:<25}  {:<10}  ({:<2})  {}".format(
-        progress_bar(current, total, width),
-        pct,
-        epoch_text,
-        elapsed,
-        format_status(run, now, active_within_seconds, color=True),
-        run.algo,
-        run.task,
+    cells = [
         run.dataset_type,
-        "{}  best={}".format(run.run_dir.name, success_text),
+        run.task,
+        run.algo,
+        run.run_dir.name,
+        epoch_text,
+        pct,
+    ]
+    if show_progress_bar:
+        cells.append(progress_bar(current, total, width))
+    cells.extend(
+        [
+            elapsed,
+            run_status(run, now, active_within_seconds),
+            "yes" if run.evaluation_complete else "no",
+            success_text,
+        ]
     )
+    return cells
+
+
+def format_progress(
+    run: RunProgress,
+    width: int,
+    now: float,
+    active_within_seconds: int,
+    show_progress_bar: bool = False,
+) -> str:
+    """Compact single-line format used by the run-deletion menu."""
+    return "  ".join(progress_cells(run, now, active_within_seconds, show_progress_bar, width))
+
+
+def print_progress_table(
+    runs: list[RunProgress],
+    now: float,
+    active_within_seconds: int,
+    show_progress_bar: bool,
+    width: int,
+    color: bool,
+) -> None:
+    headers = ["Dataset", "Task", "Algo", "Run", "Epoch", "Progress"]
+    if show_progress_bar:
+        headers.append("Bar")
+    headers.extend(["Elapsed", "Train", "Eval", "Best success"])
+    rows = [
+        progress_cells(run, now, active_within_seconds, show_progress_bar, width)
+        for run in sorted(runs, key=sort_key)
+    ]
+    column_widths = [
+        max(len(header), *(len(row[index]) for row in rows))
+        for index, header in enumerate(headers)
+    ]
+
+    def separator() -> str:
+        return "+-" + "-+-".join("-" * column_width for column_width in column_widths) + "-+"
+
+    def render_row(cells: list[str], run: RunProgress | None = None) -> str:
+        rendered = []
+        for index, cell in enumerate(cells):
+            padded = cell.ljust(column_widths[index])
+            if run is not None and headers[index] == "Train":
+                padded = colorize(padded, run_status(run, now, active_within_seconds), color)
+            elif run is not None and headers[index] == "Eval":
+                padded = colorize(padded, "yes" if cell == "yes" else "no", color)
+            rendered.append(padded)
+        return "| " + " | ".join(rendered) + " |"
+
+    print(separator())
+    print(render_row(headers))
+    print(separator())
+    for run, row in zip(sorted(runs, key=sort_key), rows):
+        print(render_row(row, run))
+    print(separator())
 
 
 def sort_key(run: RunProgress):
@@ -273,13 +395,35 @@ def main():
         "--width",
         type=int,
         default=16,
-        help="progress bar width in characters",
+        help="progress bar width in characters when --show-progress-bar is used",
+    )
+    parser.add_argument(
+        "--show-progress-bar",
+        action="store_true",
+        help="include an ASCII progress-bar column",
     )
     parser.add_argument(
         "--active-within",
         type=int,
         default=300,
         help="consider an incomplete run active if log.txt was modified within this many seconds",
+    )
+    parser.add_argument(
+        "--rollouts-root",
+        type=Path,
+        default=Path("rollouts"),
+        help="root directory containing evaluation rollout HDF files",
+    )
+    parser.add_argument(
+        "--rollout-active-within",
+        type=int,
+        default=60,
+        help="use check_progress_rollout's completion rule: a newer HDF is still active",
+    )
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="disable ANSI status colors",
     )
     args = parser.parse_args()
 
@@ -295,12 +439,21 @@ def main():
     print("Found {} run(s) under {}".format(len(runs), root))
     print("")
     now = time.time()
-    last_dataset_type = None
-    for run in sorted(runs, key=sort_key):
-        if last_dataset_type is not None and run.dataset_type != last_dataset_type:
-            print("")
-        print(format_progress(run, width=args.width, now=now, active_within_seconds=args.active_within))
-        last_dataset_type = run.dataset_type
+    completed_run_ids = completed_evaluation_run_ids(
+        args.rollouts_root.expanduser(),
+        now=now,
+        active_within_seconds=args.rollout_active_within,
+    )
+    for run in runs:
+        run.evaluation_complete = run.run_dir.name in completed_run_ids
+    print_progress_table(
+        runs,
+        now=now,
+        active_within_seconds=args.active_within,
+        show_progress_bar=args.show_progress_bar,
+        width=args.width,
+        color=not args.no_color,
+    )
 
 
 if __name__ == "__main__":

@@ -97,6 +97,8 @@ def default_robomimic_datasets(task_name: str, dataset_split: str) -> list[Datas
     if task_name == "temporal":
         return [
             DatasetLocator(path=DATASET_ROOT + f"datasets/temporal/{dataset_split}_image.hdf5", label="Demo", dataset_type=DatasetType.DEMO),
+            DatasetLocator(path=DATASET_ROOT+f"rollouts/{task_name}/{dataset_split}/bc_mod_nocrop/*.hdf5", label="BC", dataset_type=DatasetType.BASELINE),
+            DatasetLocator(path=DATASET_ROOT+f"rollouts/{task_name}/{dataset_split}/bc_rnn_mod_nocrop/*.hdf5", label="BC-RNN", dataset_type=DatasetType.BASELINE),
             DatasetLocator(path=DATASET_ROOT+f"rollouts/{task_name}/{dataset_split}/tc_diffusion_policy_mod_nocrop/*.hdf5", label="TC-DP", dataset_type=DatasetType.INFERENCE),
         ]
 

@@ -15,8 +15,8 @@ Temporal analysis is implemented in `scripts/analysis_temporal.py`
 Specific installation instructions for robomimic can be found [here](https://robomimic.github.io/docs/introduction/installation.html).
 
 ```bash
-conda create -n robomimic python=3.10
-conda activate robomimic
+conda create -n robomimic2 python=3.10
+conda activate robomimic2
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 cd robomimic
 pip install -e .

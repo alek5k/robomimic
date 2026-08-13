@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Interactively launch TemporalDP training and checkpoint evaluations.
 
-Run from the repository root, preferably from the conda environment required
-by the selected experiment:
+Run from the repository root. The launcher selects ``robomimic2`` for standard
+Robomimic experiments and ``robomimic2_temporalenvs_mujoco350`` for
+WaitAtGoal and LiftQA experiments:
 
     python robomimic/scripts/experiment_cli.py
 """
@@ -26,7 +27,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_ROOT = REPO_ROOT / "robomimic" / "exps" / "temporaldp"
 PACKAGE_ROOT = REPO_ROOT / "robomimic"
 BASE_CONDA_ENV = "robomimic2"
-TEMPORAL_CONDA_ENV = "robomimic2_temporalenvs"
+# LiftQA demonstrations were collected with MuJoCo 3.5.0. Use the isolated
+# matching environment for all temporal training and evaluation rollouts.
+TEMPORAL_CONDA_ENV = "robomimic2_temporalenvs_mujoco350"
 
 T = TypeVar("T")
 
@@ -66,6 +69,24 @@ class Checkpoint:
         return f"{self.run_id}{suffix} / {self.path.name}"
 
 
+@dataclass(frozen=True)
+class ExecutionMode:
+    """How a command should be started by the launcher."""
+
+    use_screen: bool = False
+
+
+def prompt_execution_mode() -> ExecutionMode | None:
+    mode = prompt_choice(
+        "Launch mode",
+        ["Foreground", "Detached screen session"],
+        str,
+    )
+    if mode is None:
+        return None
+    return ExecutionMode(use_screen=mode == "Detached screen session")
+
+
 def prompt_choice(title: str, options: Sequence[T], label) -> T | None:
     if not options:
         print(f"No {title.lower()} available.")
@@ -88,6 +109,35 @@ def prompt_choice(title: str, options: Sequence[T], label) -> T | None:
         if 1 <= selected <= len(options):
             return options[selected - 1]
         print(f"Choose a number from 0 to {len(options)}.")
+
+
+def prompt_multiple_choices(title: str, options: Sequence[T], label) -> list[T] | None:
+    """Select one or more options, retaining the order entered by the user."""
+    if not options:
+        print(f"No {title.lower()} available.")
+        return None
+
+    print(f"\n{title}")
+    for index, option in enumerate(options, start=1):
+        print(f"  {index:>2}. {label(option)}")
+    print("   0. Cancel")
+
+    while True:
+        answer = input("Select one or more options, comma-separated: ").strip()
+        if answer == "0":
+            return None
+        try:
+            indices = [int(index.strip()) for index in answer.split(",")]
+        except ValueError:
+            print("Enter one or more comma-separated option numbers.")
+            continue
+        if not indices or len(set(indices)) != len(indices):
+            print("Choose one or more unique option numbers, or 0 to cancel.")
+            continue
+        if any(not 1 <= index <= len(options) for index in indices):
+            print(f"Choose numbers from 1 to {len(options)}, or 0 to cancel.")
+            continue
+        return [options[index - 1] for index in indices]
 
 
 def prompt_text(label: str, default: str | None = None, validator=None) -> str:
@@ -220,7 +270,69 @@ def conda_executable() -> str:
     raise FileNotFoundError("Could not find conda. Set CONDA_EXE or add conda to PATH.")
 
 
-def launch(command: list[str], gpu: str, temporal: bool, dry_run: bool, confirm: bool = True) -> int:
+def make_screen_session(label: str) -> str:
+    """Return a screen-safe, human-readable session name."""
+    safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "-", label).strip("-_") or "job"
+    return f"robomimic-{safe_label}-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+
+
+def start_screen_session(session: str, command: str, dry_run: bool) -> int:
+    """Start ``command`` in a detached, login-interactive screen shell."""
+    screen = shutil.which("screen")
+    if screen is None:
+        print("screen was not found on PATH; cannot launch a detached session.")
+        return 127
+
+    script_path = Path("/tmp") / f"{session}.sh"
+    print(f"\nScreen session: {session}")
+    print(f"Attach with: screen -r {session}")
+    print(f"Command: {command}")
+    if dry_run:
+        print("Dry run: screen session not launched.")
+        return 0
+
+    script_path.write_text(
+        "#!/usr/bin/env bash\n"
+        "shopt -s expand_aliases\n"
+        "source ~/.bashrc 2>/dev/null || true\n"
+        f"{command}\n",
+        encoding="utf-8",
+    )
+    script_path.chmod(0o755)
+
+    screen_cmd = [
+        screen,
+        "-T", "screen-256color",
+        "-S", session,
+        "-dm",
+        "bash",
+        "-l",
+        "-i",
+    ]
+    exit_code = subprocess.run(screen_cmd, cwd=REPO_ROOT, check=False).returncode
+    if exit_code:
+        print(f"Could not create screen session {session} (status {exit_code}).")
+        return exit_code
+
+    payload = f"source {script_path}\r"
+    stuff_cmd = [
+        screen,
+        "-S", session,
+        "-p", "0",
+        "-X", "stuff",
+        payload,
+    ]
+    exit_code = subprocess.run(stuff_cmd, cwd=REPO_ROOT, check=False).returncode
+    if exit_code:
+        print(f"Could not send the command to screen session {session} (status {exit_code}).")
+    return exit_code
+
+
+def command_with_runtime(
+    command: list[str],
+    gpu: str,
+    temporal: bool,
+) -> tuple[list[str], dict[str, str], str]:
     environment = os.environ.copy()
     environment["CUDA_VISIBLE_DEVICES"] = gpu
     environment["MUJOCO_GL"] = "egl"
@@ -234,14 +346,30 @@ def launch(command: list[str], gpu: str, temporal: bool, dry_run: bool, confirm:
         for name in ("CUDA_VISIBLE_DEVICES", "MUJOCO_GL", "SDL_VIDEODRIVER", "NUMBA_DISABLE_JIT")
         if name in environment
     )
+    return runtime_command, environment, f"{env_prefix} {shlex.join(runtime_command)}"
+
+
+def launch(
+    command: list[str],
+    gpu: str,
+    temporal: bool,
+    dry_run: bool,
+    confirm: bool = True,
+    execution: ExecutionMode = ExecutionMode(),
+    label: str = "job",
+) -> int:
+    runtime_command, environment, printable_command = command_with_runtime(command, gpu, temporal)
     print("\nCommand:")
-    print(f"  {env_prefix} {shlex.join(runtime_command)}")
+    print(f"  {printable_command}")
     if dry_run:
         print("Dry run: command not launched.")
         return 0
     if confirm and not prompt_yes_no("Launch this command?", default=False):
         print("Skipped.")
         return 0
+    if execution.use_screen:
+        screen_command = f"cd {shlex.quote(str(REPO_ROOT))} && {printable_command}"
+        return start_screen_session(make_screen_session(label), screen_command, dry_run=False)
     return subprocess.run(runtime_command, cwd=REPO_ROOT, env=environment, check=False).returncode
 
 
@@ -261,12 +389,61 @@ def run_progress_script(script_name: str) -> None:
         print(f"{script_name} exited with status {exit_code}.")
 
 
+def run_analysis(dry_run: bool) -> None:
+    """Run analysis for one standard PH task or one temporal dataset."""
+    environment = prompt_choice(
+        "Analysis environment",
+        ["lift", "can", "square", "temporal"],
+        str,
+    )
+    if environment is None:
+        return
+
+    temporal_split = None
+    if environment == "temporal":
+        temporal_split = prompt_choice(
+            "Temporal dataset",
+            ["waitatgoal", "liftqa"],
+            str,
+        )
+        if temporal_split is None:
+            return
+
+    command = [
+        "python",
+        "robomimic/scripts/analysis_temporal.py",
+        "--task_names",
+        f"[{environment}]",
+        "--dataset_split",
+        "ph",
+    ]
+    if temporal_split is not None:
+        command.extend(["--temporal_dataset_split", temporal_split])
+    execution = prompt_execution_mode()
+    if execution is None:
+        return
+    exit_code = launch(
+        command,
+        gpu="0",
+        temporal=temporal_split is not None,
+        dry_run=dry_run,
+        confirm=True,
+        execution=execution,
+        label=f"analysis-{temporal_split or environment}",
+    )
+    if exit_code:
+        print(f"analysis_temporal.py exited with status {exit_code}.")
+
+
 def run_training(experiments: Sequence[Experiment], dry_run: bool) -> None:
     experiment = select_experiment(experiments)
     if experiment is None:
         return
     gpu = prompt_text("GPU", default="0", validator=lambda value: bool(value))
     seeds = prompt_seeds("Training seed(s), comma-separated", default="1")
+    execution = prompt_execution_mode()
+    if execution is None:
+        return
     if len(seeds) > 1 and not dry_run:
         if not prompt_yes_no(f"Launch {len(seeds)} training jobs sequentially?", default=False):
             print("Skipped.")
@@ -281,7 +458,15 @@ def run_training(experiments: Sequence[Experiment], dry_run: bool) -> None:
             "--seed",
             seed,
         ]
-        exit_code = launch(command, gpu, experiment.is_temporal, dry_run, confirm=len(seeds) == 1)
+        exit_code = launch(
+            command,
+            gpu,
+            experiment.is_temporal,
+            dry_run,
+            confirm=len(seeds) == 1,
+            execution=execution,
+            label=f"train-{experiment.environment}-{experiment.algorithm}-seed{seed}",
+        )
         if exit_code:
             print(f"Training seed {seed} exited with status {exit_code}.")
 
@@ -324,15 +509,17 @@ def run_evaluation(experiments: Sequence[Experiment], dry_run: bool) -> None:
     experiment = select_experiment(experiments)
     if experiment is None:
         return
-    checkpoint = prompt_choice(
+    checkpoints = prompt_multiple_choices(
         "Timestamped runs (best checkpoint selected automatically)",
         discover_checkpoints(experiment),
         lambda item: item.label,
     )
-    if checkpoint is None:
+    if checkpoints is None:
         return
-    action_normalization = checkpoint_action_normalization(checkpoint)
-    if experiment.is_temporal and action_normalization is None:
+    if experiment.is_temporal and any(
+        checkpoint_action_normalization(checkpoint) is None
+        for checkpoint in checkpoints
+    ):
         print(
             "\nWarning: this temporal configuration uses unnormalised coordinate actions. "
             "Existing checkpoints trained from it commonly saturate near [1, 1] and "
@@ -340,7 +527,7 @@ def run_evaluation(experiments: Sequence[Experiment], dry_run: bool) -> None:
             "but retrain with the updated min_max configuration for meaningful rollouts."
         )
     gpu = prompt_text("GPU", default="0", validator=lambda value: bool(value))
-    default_seed = str(int(checkpoint.run_id) % 4_294_967_295) if checkpoint.run_id.isdigit() else "1"
+    default_seed = "1000"
     seeds = prompt_seeds("Evaluation seed(s), comma-separated", default=default_seed)
     default_n_rollouts = "200" if experiment.is_temporal else "100"
     n_rollouts = prompt_text(
@@ -348,14 +535,188 @@ def run_evaluation(experiments: Sequence[Experiment], dry_run: bool) -> None:
         default=default_n_rollouts,
         validator=lambda value: value.isdigit() and int(value) > 0,
     )
+    execution = prompt_execution_mode()
+    if execution is None:
+        return
     if not dry_run and not prompt_yes_no(
-        f"Write metadata and launch {len(seeds)} evaluation job(s) sequentially?", default=False
+        f"Write metadata and launch {len(checkpoints) * len(seeds)} evaluation job(s) sequentially?", default=False
     ):
         print("Skipped.")
         return
 
-    for seed in seeds:
-        dataset_path = rollout_output_path(experiment, checkpoint, seed, multi_seed=len(seeds) > 1)
+    plan = {
+        "experiment": experiment_to_plan(experiment),
+        "checkpoint_paths": [str(checkpoint.path) for checkpoint in checkpoints],
+        "gpu": gpu,
+        "evaluation_seeds": seeds,
+        "n_rollouts": n_rollouts,
+    }
+    if not execution.use_screen:
+        run_evaluation_plan(plan, dry_run=dry_run)
+        return
+
+    session = make_screen_session(f"eval-{experiment.environment}-{experiment.algorithm}")
+    plan_path = Path("/tmp") / f"{session}.json"
+    if not dry_run:
+        plan_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+    coordinator_command = [
+        conda_executable(),
+        "run",
+        "--no-capture-output",
+        "-n",
+        BASE_CONDA_ENV,
+        "python",
+        "robomimic/scripts/experiment_cli.py",
+        "--run-evaluation-plan",
+        str(plan_path),
+    ]
+    command = f"cd {shlex.quote(str(REPO_ROOT))} && {shlex.join(coordinator_command)}"
+    start_screen_session(session, command, dry_run=dry_run)
+
+
+def experiment_to_plan(experiment: Experiment) -> dict:
+    return {
+        "environment": experiment.environment,
+        "algorithm": experiment.algorithm,
+        "config_path": str(experiment.config_path.relative_to(REPO_ROOT)),
+        "split": experiment.split,
+    }
+
+
+def experiment_from_plan(plan: dict) -> Experiment:
+    experiment_data = plan["experiment"]
+    config_path = Path(experiment_data["config_path"])
+    if not config_path.is_absolute():
+        config_path = REPO_ROOT / config_path
+    config_path = config_path.resolve()
+    try:
+        config_path.relative_to(CONFIG_ROOT)
+    except ValueError as exc:
+        raise ValueError(f"Batch plan config is outside {CONFIG_ROOT}: {config_path}") from exc
+    return Experiment(
+        environment=experiment_data["environment"],
+        algorithm=experiment_data["algorithm"],
+        config_path=config_path,
+        split=experiment_data.get("split"),
+    )
+
+
+def run_evaluation_plan(plan: dict, dry_run: bool) -> None:
+    """Evaluate selected checkpoints in their plan order, one job at a time."""
+    experiment = experiment_from_plan(plan)
+    available_checkpoints = {
+        str(checkpoint.path.resolve()): checkpoint
+        for checkpoint in discover_checkpoints(experiment)
+    }
+    checkpoint_paths = [str(Path(path).resolve()) for path in plan["checkpoint_paths"]]
+    checkpoints = []
+    for checkpoint_path in checkpoint_paths:
+        checkpoint = available_checkpoints.get(checkpoint_path)
+        if checkpoint is None:
+            raise FileNotFoundError(
+                "Selected checkpoint is no longer available as the best checkpoint for this run: "
+                f"{checkpoint_path}"
+            )
+        checkpoints.append(checkpoint)
+
+    gpu = str(plan["gpu"])
+    seeds = [str(seed) for seed in plan["evaluation_seeds"]]
+    n_rollouts = str(plan["n_rollouts"])
+    if not checkpoints or not seeds:
+        raise ValueError("Evaluation plan must contain at least one checkpoint and one seed.")
+
+    print(
+        f"\nEvaluation workflow: {len(checkpoints)} selected run(s), "
+        f"{len(seeds)} seed(s) each, executed sequentially."
+    )
+    for checkpoint in checkpoints:
+        for seed in seeds:
+            dataset_path = rollout_output_path(experiment, checkpoint, seed, multi_seed=len(seeds) > 1)
+            info_path = dataset_path.with_name(f"{dataset_path.stem}_info.txt")
+            command = [
+                "python",
+                "robomimic/scripts/run_trained_agent.py",
+                "--agent",
+                str(checkpoint.path),
+                "--dataset_path",
+                str(dataset_path),
+                "--n_rollouts",
+                n_rollouts,
+                "--seed",
+                seed,
+                "--dataset_obs",
+            ]
+            if not dry_run:
+                dataset_path.parent.mkdir(parents=True, exist_ok=True)
+                write_eval_info(info_path, experiment, checkpoint, dataset_path, gpu, seed, n_rollouts)
+            exit_code = launch(
+                command,
+                gpu,
+                experiment.is_temporal,
+                dry_run,
+                confirm=False,
+                label=f"eval-{experiment.environment}-{experiment.algorithm}-{checkpoint.run_id}-seed{seed}",
+            )
+            if exit_code:
+                print(f"Evaluation for {checkpoint.run_id}, seed {seed} exited with status {exit_code}.")
+
+
+def run_batch_plan(plan: dict, dry_run: bool) -> None:
+    """Train every seed, then evaluate the best checkpoint from every new run."""
+    experiment = experiment_from_plan(plan)
+    gpu = str(plan["gpu"])
+    training_seeds = [str(seed) for seed in plan["training_seeds"]]
+    evaluation_seed = str(plan["evaluation_seed"])
+    n_rollouts = str(plan["n_rollouts"])
+    if not training_seeds:
+        raise ValueError("Batch plan must contain at least one training seed.")
+
+    existing_run_ids = {checkpoint.run_id for checkpoint in discover_checkpoints(experiment)}
+    print(
+        f"\nBatch workflow: {len(training_seeds)} training job(s), then one evaluation "
+        "for each newly created run."
+    )
+    for seed in training_seeds:
+        command = [
+            "python",
+            "robomimic/scripts/train.py",
+            "--config",
+            str(experiment.config_path.relative_to(REPO_ROOT)),
+            "--seed",
+            seed,
+        ]
+        exit_code = launch(
+            command,
+            gpu,
+            experiment.is_temporal,
+            dry_run,
+            confirm=False,
+            label=f"train-{experiment.environment}-{experiment.algorithm}-seed{seed}",
+        )
+        if exit_code:
+            print(f"Training seed {seed} exited with status {exit_code}.")
+
+    if dry_run:
+        print("Dry run: evaluations will be selected from the checkpoints created by these training jobs.")
+        return
+
+    new_checkpoints = [
+        checkpoint
+        for checkpoint in discover_checkpoints(experiment)
+        if checkpoint.run_id not in existing_run_ids
+    ]
+    new_checkpoints.sort(key=lambda checkpoint: checkpoint.run_id)
+    if not new_checkpoints:
+        print("No new checkpoints were found; evaluations were not launched.")
+        return
+    if len(new_checkpoints) != len(training_seeds):
+        print(
+            f"Found {len(new_checkpoints)} newly checkpointed run(s) after {len(training_seeds)} "
+            "training job(s); evaluating each discovered run."
+        )
+
+    for checkpoint in new_checkpoints:
+        dataset_path = rollout_output_path(experiment, checkpoint, evaluation_seed, multi_seed=False)
         info_path = dataset_path.with_name(f"{dataset_path.stem}_info.txt")
         command = [
             "python",
@@ -367,15 +728,84 @@ def run_evaluation(experiments: Sequence[Experiment], dry_run: bool) -> None:
             "--n_rollouts",
             n_rollouts,
             "--seed",
-            seed,
+            evaluation_seed,
             "--dataset_obs",
         ]
-        if not dry_run:
-            dataset_path.parent.mkdir(parents=True, exist_ok=True)
-            write_eval_info(info_path, experiment, checkpoint, dataset_path, gpu, seed, n_rollouts)
-        exit_code = launch(command, gpu, experiment.is_temporal, dry_run, confirm=False)
+        dataset_path.parent.mkdir(parents=True, exist_ok=True)
+        write_eval_info(info_path, experiment, checkpoint, dataset_path, gpu, evaluation_seed, n_rollouts)
+        exit_code = launch(
+            command,
+            gpu,
+            experiment.is_temporal,
+            dry_run=False,
+            confirm=False,
+            label=f"eval-{experiment.environment}-{experiment.algorithm}-{checkpoint.run_id}",
+        )
         if exit_code:
-            print(f"Evaluation seed {seed} exited with status {exit_code}.")
+            print(f"Evaluation for {checkpoint.run_id} exited with status {exit_code}.")
+
+
+def run_train_then_evaluate(experiments: Sequence[Experiment], dry_run: bool) -> None:
+    """Collect a batch plan and run it locally or as one detached screen workflow."""
+    experiment = select_experiment(experiments)
+    if experiment is None:
+        return
+    gpu = prompt_text("GPU", default="0", validator=lambda value: bool(value))
+    training_seeds = prompt_seeds("Training seed(s), comma-separated", default="1,2,3")
+    evaluation_seed = prompt_text(
+        "Evaluation rollout seed (used for every newly trained run)",
+        default="1000",
+        validator=lambda value: value.isdigit(),
+    )
+    default_n_rollouts = "200" if experiment.is_temporal else "100"
+    n_rollouts = prompt_text(
+        "Number of rollouts per newly trained run",
+        default=default_n_rollouts,
+        validator=lambda value: value.isdigit() and int(value) > 0,
+    )
+    execution = prompt_execution_mode()
+    if execution is None:
+        return
+    if not dry_run and not prompt_yes_no(
+        f"Run {len(training_seeds)} training job(s), then evaluate every newly created run?",
+        default=False,
+    ):
+        print("Skipped.")
+        return
+
+    plan = {
+        "experiment": {
+            "environment": experiment.environment,
+            "algorithm": experiment.algorithm,
+            "config_path": str(experiment.config_path.relative_to(REPO_ROOT)),
+            "split": experiment.split,
+        },
+        "gpu": gpu,
+        "training_seeds": training_seeds,
+        "evaluation_seed": evaluation_seed,
+        "n_rollouts": n_rollouts,
+    }
+    if not execution.use_screen:
+        run_batch_plan(plan, dry_run=dry_run)
+        return
+
+    session = make_screen_session(f"batch-{experiment.environment}-{experiment.algorithm}")
+    plan_path = Path("/tmp") / f"{session}.json"
+    if not dry_run:
+        plan_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+    coordinator_command = [
+        conda_executable(),
+        "run",
+        "--no-capture-output",
+        "-n",
+        BASE_CONDA_ENV,
+        "python",
+        "robomimic/scripts/experiment_cli.py",
+        "--run-batch-plan",
+        str(plan_path),
+    ]
+    command = f"cd {shlex.quote(str(REPO_ROOT))} && {shlex.join(coordinator_command)}"
+    start_screen_session(session, command, dry_run=dry_run)
 
 
 def select_progress_runs_for_deletion():
@@ -455,7 +885,26 @@ def delete_run_directories(dry_run: bool) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="Print commands without launching them or writing metadata.")
+    parser.add_argument(
+        "--run-batch-plan",
+        type=Path,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--run-evaluation-plan",
+        type=Path,
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
+
+    if args.run_batch_plan is not None:
+        with args.run_batch_plan.open(encoding="utf-8") as file:
+            run_batch_plan(json.load(file), dry_run=args.dry_run)
+        return
+    if args.run_evaluation_plan is not None:
+        with args.run_evaluation_plan.open(encoding="utf-8") as file:
+            run_evaluation_plan(json.load(file), dry_run=args.dry_run)
+        return
 
     experiments = discover_experiments()
     if not experiments:
@@ -465,7 +914,15 @@ def main() -> None:
         while True:
             action = prompt_choice(
                 "Action",
-                ["Train", "Evaluate", "Check training progress", "Check rollout progress", "Delete timestamped training run"],
+                [
+                    "Train",
+                    "Evaluate",
+                    "Train then evaluate",
+                    "Run analysis",
+                    "Check training progress",
+                    "Check rollout progress",
+                    "Delete timestamped training run",
+                ],
                 str,
             )
             if action is None:
@@ -474,6 +931,10 @@ def main() -> None:
                 run_training(experiments, args.dry_run)
             elif action == "Evaluate":
                 run_evaluation(experiments, args.dry_run)
+            elif action == "Train then evaluate":
+                run_train_then_evaluate(experiments, args.dry_run)
+            elif action == "Run analysis":
+                run_analysis(args.dry_run)
             elif action == "Check training progress":
                 run_progress_script("check_progress.py")
             elif action == "Check rollout progress":

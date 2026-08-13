@@ -14,7 +14,7 @@ ANSI_GREEN = "\033[32m"
 ANSI_BLUE = "\033[34m"
 ANSI_RESET = "\033[0m"
 STATUS_ACTIVE = "active"
-STATUS_COMPLETE = "complete?"
+STATUS_COMPLETE = "complete"
 
 
 @dataclass

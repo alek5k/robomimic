@@ -13,11 +13,17 @@
 <p class="admonition-title">1. Create and activate conda environment</p>
 
 ```sh
-$ conda create -n robomimic_venv python=3.8.0
-$ conda activate robomimic_venv
+$ conda create -n robomimic2 python=3.10
+$ conda activate robomimic2
 ```
 
 </div>
+
+For this fork, use `robomimic2` for the standard Robomimic / Robosuite
+workflows. WaitAtGoal and LiftQA require the separate
+`robomimic2_temporalenvs_mujoco350` environment; its optional dependencies and
+usage are documented in
+[`robomimic/exps/temporaldp/temporal/README.md`](../../robomimic/exps/temporaldp/temporal/README.md).
 
 <div class="admonition note">
 <p class="admonition-title">2. Install PyTorch</p>

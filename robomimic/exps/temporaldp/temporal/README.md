@@ -3,6 +3,7 @@
 Install the optional environment dependencies before using train-time rollouts:
 
 ```bash
+conda activate robomimic2_temporalenvs_mujoco350
 pip install -e ".[temporal-envs]"
 ```
 
@@ -54,6 +55,7 @@ three-dimensional controls.
 Train from the repository root, for example:
 
 ```bash
+conda activate robomimic2_temporalenvs_mujoco350
 python robomimic/scripts/train.py --config robomimic/exps/temporaldp/temporal/waitatgoal/bc.json
 python robomimic/scripts/train.py --config robomimic/exps/temporaldp/temporal/liftqa/bc_rnn_mod_nocrop.json
 python robomimic/scripts/train.py --config robomimic/exps/temporaldp/temporal/waitatgoal/diffusion_policy_mod.json
@@ -67,4 +69,3 @@ gradient update and one native rollout with a short DDIM schedule:
 python robomimic/scripts/smoke_test_temporal_diffusion.py \
   --config robomimic/exps/temporaldp/temporal/waitatgoal/tc_diffusion_policy_mod.json
 ```
-
