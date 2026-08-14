@@ -145,6 +145,40 @@ done
 
 ---
 
+## Archive rollout images
+
+Create a compressed H.264 video from all image observations in a rollout HDF5:
+
+```bash
+conda run -n robomimic2 python robomimic/scripts/rollout_hdf_to_video.py \
+  rollouts/lift/ph/bc/<RUN>.hdf5
+```
+
+The export is non-destructive by default. After reviewing the MP4, rerun with
+`--overwrite --delete-images --delete-lang-emb` to compactly rewrite the HDF5
+without the archived `/obs` and `/next_obs` image datasets and `lang_emb`.
+This is irreversible but frees the disk space.
+Use `--image-keys agentview_image` to archive only one camera, or `--max-demos 1`
+to make a small verification video without deleting data.
+
+Archive every rollout below `rollouts` in place (and delete images only after
+each MP4 is verified):
+
+```bash
+conda run -n robomimic2 python robomimic/scripts/rollout_hdf_to_video.py \
+  rollouts --recursive --overwrite --delete-images --delete-lang-emb
+```
+
+The Experiment CLI automatically performs this archive-and-compact step after
+each successful evaluation. This works for individual evaluation, multi-run
+evaluation, and the train-then-evaluate workflow; if archival fails, the HDF5
+images are retained.
+
+Temporal rollout HDF5 files persist only the observation keys used by the
+checkpointed policy. In particular, WaitAtGoal and LiftQA native float32
+`full_image` debug fields are not written; the policy's compact uint8 `image`
+is archived to the MP4 instead.
+
 
 # Modification Notes:
 HBC failed because of image layout.

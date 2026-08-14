@@ -154,6 +154,38 @@ def prompt_text(label: str, default: str | None = None, validator=None) -> str:
         return value
 
 
+def print_gpu_memory_summary() -> None:
+    """Print a best-effort GPU memory snapshot before asking for a device."""
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi is None:
+        print("GPU memory: nvidia-smi not found.")
+        return
+    command = [
+        nvidia_smi,
+        "--query-gpu=index,memory.used,memory.total",
+        "--format=csv,noheader,nounits",
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode:
+        print("GPU memory: unavailable.")
+        return
+    summary = []
+    for line in result.stdout.splitlines():
+        try:
+            index, used, total = (value.strip() for value in line.split(","))
+            used_mib, total_mib = int(used), int(total)
+            percent = 100.0 * used_mib / total_mib if total_mib else 0.0
+            summary.append(f"GPU {index}: {used_mib}/{total_mib} MiB ({percent:.0f}%)")
+        except ValueError:
+            continue
+    print("GPU memory: " + (" | ".join(summary) if summary else "unavailable."))
+
+
+def prompt_gpu() -> str:
+    print_gpu_memory_summary()
+    return prompt_text("GPU", default="0", validator=lambda value: bool(value))
+
+
 def prompt_yes_no(question: str, default: bool = False) -> bool:
     marker = "Y/n" if default else "y/N"
     while True:
@@ -295,7 +327,12 @@ def start_screen_session(session: str, command: str, dry_run: bool) -> int:
         "#!/usr/bin/env bash\n"
         "shopt -s expand_aliases\n"
         "source ~/.bashrc 2>/dev/null || true\n"
-        f"{command}\n",
+        f"{command}\n"
+        "exit_code=$?\n"
+        "if [ \"$exit_code\" -eq 0 ]; then\n"
+        "    exit 0\n"
+        "fi\n"
+        "echo \"Command failed with status $exit_code; leaving this screen session open.\"\n",
         encoding="utf-8",
     )
     script_path.chmod(0o755)
@@ -439,7 +476,7 @@ def run_training(experiments: Sequence[Experiment], dry_run: bool) -> None:
     experiment = select_experiment(experiments)
     if experiment is None:
         return
-    gpu = prompt_text("GPU", default="0", validator=lambda value: bool(value))
+    gpu = prompt_gpu()
     seeds = prompt_seeds("Training seed(s), comma-separated", default="1")
     execution = prompt_execution_mode()
     if execution is None:
@@ -505,6 +542,31 @@ def write_eval_info(
     info_path.write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
 
 
+def archive_evaluation_rollout(
+    dataset_path: Path,
+    gpu: str,
+    temporal: bool,
+    dry_run: bool,
+) -> int:
+    """Compress a completed rollout and reclaim its HDF5 image storage."""
+    command = [
+        "python",
+        "robomimic/scripts/rollout_hdf_to_video.py",
+        str(dataset_path),
+        "--overwrite",
+        "--delete-images",
+        "--delete-lang-emb",
+    ]
+    return launch(
+        command,
+        gpu,
+        temporal,
+        dry_run,
+        confirm=False,
+        label=f"archive-{dataset_path.stem}",
+    )
+
+
 def run_evaluation(experiments: Sequence[Experiment], dry_run: bool) -> None:
     experiment = select_experiment(experiments)
     if experiment is None:
@@ -526,7 +588,7 @@ def run_evaluation(experiments: Sequence[Experiment], dry_run: bool) -> None:
             "collide after a few steps. This evaluation will still run and be written, "
             "but retrain with the updated min_max configuration for meaningful rollouts."
         )
-    gpu = prompt_text("GPU", default="0", validator=lambda value: bool(value))
+    gpu = prompt_gpu()
     default_seed = "1000"
     seeds = prompt_seeds("Evaluation seed(s), comma-separated", default=default_seed)
     default_n_rollouts = "200" if experiment.is_temporal else "100"
@@ -550,6 +612,7 @@ def run_evaluation(experiments: Sequence[Experiment], dry_run: bool) -> None:
         "gpu": gpu,
         "evaluation_seeds": seeds,
         "n_rollouts": n_rollouts,
+        "archive_rollout_images": True,
     }
     if not execution.use_screen:
         run_evaluation_plan(plan, dry_run=dry_run)
@@ -622,6 +685,7 @@ def run_evaluation_plan(plan: dict, dry_run: bool) -> None:
     gpu = str(plan["gpu"])
     seeds = [str(seed) for seed in plan["evaluation_seeds"]]
     n_rollouts = str(plan["n_rollouts"])
+    archive_rollout_images = bool(plan.get("archive_rollout_images", False))
     if not checkpoints or not seeds:
         raise ValueError("Evaluation plan must contain at least one checkpoint and one seed.")
 
@@ -659,6 +723,19 @@ def run_evaluation_plan(plan: dict, dry_run: bool) -> None:
             )
             if exit_code:
                 print(f"Evaluation for {checkpoint.run_id}, seed {seed} exited with status {exit_code}.")
+                continue
+            if archive_rollout_images:
+                archive_exit_code = archive_evaluation_rollout(
+                    dataset_path,
+                    gpu,
+                    experiment.is_temporal,
+                    dry_run,
+                )
+                if archive_exit_code:
+                    print(
+                        f"Image archival for {checkpoint.run_id}, seed {seed} exited with status "
+                        f"{archive_exit_code}; rollout images were retained."
+                    )
 
 
 def run_batch_plan(plan: dict, dry_run: bool) -> None:
@@ -668,6 +745,7 @@ def run_batch_plan(plan: dict, dry_run: bool) -> None:
     training_seeds = [str(seed) for seed in plan["training_seeds"]]
     evaluation_seed = str(plan["evaluation_seed"])
     n_rollouts = str(plan["n_rollouts"])
+    archive_rollout_images = bool(plan.get("archive_rollout_images", False))
     if not training_seeds:
         raise ValueError("Batch plan must contain at least one training seed.")
 
@@ -743,6 +821,19 @@ def run_batch_plan(plan: dict, dry_run: bool) -> None:
         )
         if exit_code:
             print(f"Evaluation for {checkpoint.run_id} exited with status {exit_code}.")
+            continue
+        if archive_rollout_images:
+            archive_exit_code = archive_evaluation_rollout(
+                dataset_path,
+                gpu,
+                experiment.is_temporal,
+                dry_run=False,
+            )
+            if archive_exit_code:
+                print(
+                    f"Image archival for {checkpoint.run_id} exited with status {archive_exit_code}; "
+                    "rollout images were retained."
+                )
 
 
 def run_train_then_evaluate(experiments: Sequence[Experiment], dry_run: bool) -> None:
@@ -750,7 +841,7 @@ def run_train_then_evaluate(experiments: Sequence[Experiment], dry_run: bool) ->
     experiment = select_experiment(experiments)
     if experiment is None:
         return
-    gpu = prompt_text("GPU", default="0", validator=lambda value: bool(value))
+    gpu = prompt_gpu()
     training_seeds = prompt_seeds("Training seed(s), comma-separated", default="1,2,3")
     evaluation_seed = prompt_text(
         "Evaluation rollout seed (used for every newly trained run)",
@@ -784,6 +875,7 @@ def run_train_then_evaluate(experiments: Sequence[Experiment], dry_run: bool) ->
         "training_seeds": training_seeds,
         "evaluation_seed": evaluation_seed,
         "n_rollouts": n_rollouts,
+        "archive_rollout_images": True,
     }
     if not execution.use_screen:
         run_batch_plan(plan, dry_run=dry_run)
@@ -941,8 +1033,6 @@ def main() -> None:
                 run_progress_script("check_progress_rollout.py")
             else:
                 delete_run_directories(args.dry_run)
-            if not prompt_yes_no("Would you like to run another?", default=False):
-                return
     except (EOFError, KeyboardInterrupt):
         print("\nExited.")
 

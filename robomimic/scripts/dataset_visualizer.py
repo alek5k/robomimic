@@ -4,9 +4,13 @@ import os
 
 import h5py
 import numpy as np
+# /home/sydney1/Repos/robomimic/datasets/transport/ph/image_v15.hdf5
+# "/home/sydney1/Repos/robomimic/rollouts/temporal/waitatgoal/tc_diffusion_policy_mod_nocrop/20260810170345_model_epoch_100_waitatgoal_image_success_0.98.hdf5"
+
+DEFAULT_PATH = "/home/sydney1/Repos/robomimic/datasets/temporal/liftqa_image.hdf5"
 
 parser = argparse.ArgumentParser(description="Visualize episodes and timesteps from a robomimic HDF5 dataset")
-parser.add_argument("--source", default="/home/sydney1/Repos/robomimic/datasets/transport/ph/image_v15.hdf5", help="Path to HDF5 dataset file")
+parser.add_argument("--source", default=DEFAULT_PATH, help="Path to HDF5 dataset file")
 # parser.add_argument("--source", default="rollouts/can/ph/tc_diffusion_policy/20260501172718_model_epoch_240_image_v15_success_1.0.pth.hdf5", help="Path to HDF5 dataset file")
 parser.add_argument("--image-key", default=None, help="Primary image key to display (if not set, will detect first image key)")
 parser.add_argument("--window-title", default="Robomimic Dataset Visualizer", help="Window title")

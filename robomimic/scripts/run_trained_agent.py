@@ -66,9 +66,27 @@ import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.torch_utils as TorchUtils
 import robomimic.utils.tensor_utils as TensorUtils
 import robomimic.utils.obs_utils as ObsUtils
-from robomimic.envs.env_base import EnvBase
+from robomimic.envs.env_base import EnvBase, EnvType
 from robomimic.envs.wrappers import EnvWrapper
 from robomimic.algo import RolloutPolicy
+
+
+def observations_for_rollout_dataset(policy, env, observation):
+    """Keep Temporal rollout files to policy inputs, not native debug fields.
+
+    Temporal environments expose native fields such as ``full_image`` for task
+    diagnostics. The policy consumes the adapted keys in its saved observation
+    config (for example, ``image`` and ``agent_pose``). Persisting every raw
+    field made WaitAtGoal rollouts enormous because ``full_image`` is float32
+    and was written for both obs and next_obs at every step.
+    """
+    if env.type != EnvType.TEMPORAL_TYPE:
+        return observation
+    policy_keys = tuple(policy.policy.global_config.all_obs_keys)
+    missing = [key for key in policy_keys if key not in observation]
+    if missing:
+        raise KeyError(f"Temporal rollout observation is missing policy key(s): {missing}")
+    return {key: observation[key] for key in policy_keys}
 
 
 def rollout(policy, env, horizon, render=False, video_writer=None, video_skip=5, return_obs=False, camera_names=None):
@@ -142,8 +160,8 @@ def rollout(policy, env, horizon, render=False, video_writer=None, video_skip=5,
             traj["dones"].append(done)
             traj["states"].append(state_dict["states"])
             if return_obs:
-                traj["obs"].append(obs)
-                traj["next_obs"].append(next_obs)
+                traj["obs"].append(observations_for_rollout_dataset(policy, env, obs))
+                traj["next_obs"].append(observations_for_rollout_dataset(policy, env, next_obs))
 
             # break if done or if success
             if done or success:
