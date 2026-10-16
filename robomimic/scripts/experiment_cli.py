@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import itertools
 import json
 import os
 from pathlib import Path
@@ -30,8 +31,8 @@ BASE_CONDA_ENV = "robomimic2"
 # LiftQA demonstrations were collected with MuJoCo 3.5.0. Use the isolated
 # matching environment for all temporal training and evaluation rollouts.
 TEMPORAL_CONDA_ENV = "robomimic2_temporalenvs_mujoco350"
-
 T = TypeVar("T")
+SCREEN_SESSION_SEQUENCE = itertools.count()
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,35 @@ class Experiment:
     @property
     def label(self) -> str:
         split = f" / {self.split}" if self.split else ""
-        return f"{self.algorithm}{split}"
+        return f"{self.algorithm}{split}{self.conditioning_label}"
+
+    @property
+    def conditioning_label(self) -> str:
+        """Compact temporal-conditioning label read from the experiment config."""
+        try:
+            with self.config_path.open(encoding="utf-8") as file:
+                temporal = json.load(file).get("observation", {}).get("temporal_encodings", {})
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return ""
+
+        features = []
+        learned = temporal.get("learned_encoder", {})
+        if learned.get("enabled", False):
+            if learned.get("input_signal") == "image_embedding" and not learned.get("use_timestep_signal", False):
+                features.append("LTE-IMG-NoT")
+            else:
+                features.append("LTE-{}".format(learned.get("input_signal", "velocity")))
+        if temporal.get("use_direct_time", False):
+            features.append("direct-time")
+        if temporal.get("use_direct_idleness", False):
+            features.append("direct-idle")
+        if temporal.get("use_idleness_encoding", False):
+            features.append("ID")
+        if temporal.get("use_sinusoidal_progress_encoding", False):
+            features.append("SiP")
+        if temporal.get("use_saturating_progress_encoding", False):
+            features.append("SaP")
+        return f" [{', '.join(features)}]" if features else ""
 
 
 @dataclass(frozen=True)
@@ -235,6 +264,7 @@ def select_experiment(experiments: Sequence[Experiment]) -> Experiment | None:
     if environment is None:
         return None
     candidates = [experiment for experiment in experiments if experiment.environment == environment]
+    candidates.sort(key=lambda experiment: experiment.algorithm)
     return prompt_choice("Algorithm and dataset split", candidates, lambda experiment: experiment.label)
 
 
@@ -305,7 +335,15 @@ def conda_executable() -> str:
 def make_screen_session(label: str) -> str:
     """Return a screen-safe, human-readable session name."""
     safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "-", label).strip("-_") or "job"
-    return f"robomimic-{safe_label}-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+    # A batch launch shares one Python process and often creates every screen
+    # within the same second. The sequence prevents ambiguous duplicate names.
+    suffix = f"-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{next(SCREEN_SESSION_SEQUENCE)}"
+    # GNU screen limits session names. Keep enough room for the fixed prefix
+    # and unique suffix instead of allowing long conditioning-variant labels
+    # to make detached launches fail.
+    max_length = 64
+    label_budget = max_length - len("robomimic-") - len(suffix)
+    return f"robomimic-{safe_label[:label_budget]}{suffix}"
 
 
 def start_screen_session(session: str, command: str, dry_run: bool) -> int:
@@ -373,8 +411,11 @@ def command_with_runtime(
     environment = os.environ.copy()
     environment["CUDA_VISIBLE_DEVICES"] = gpu
     environment["MUJOCO_GL"] = "egl"
+    # The packaged Robosuite installation enables Numba's file cache, but its
+    # source location is not cacheable on the shared runtime filesystem.
+    environment["NUMBA_DISABLE_JIT"] = "1"
     if temporal:
-        environment.update({"SDL_VIDEODRIVER": "dummy", "NUMBA_DISABLE_JIT": "1"})
+        environment["SDL_VIDEODRIVER"] = "dummy"
     conda_env = TEMPORAL_CONDA_ENV if temporal else BASE_CONDA_ENV
     runtime_command = [conda_executable(), "run", "--no-capture-output", "-n", conda_env, *command]
 
@@ -485,6 +526,57 @@ def run_training(experiments: Sequence[Experiment], dry_run: bool) -> None:
         if not prompt_yes_no(f"Launch {len(seeds)} training jobs sequentially?", default=False):
             print("Skipped.")
             return
+
+    # A detached screen returns as soon as it starts, so launching each seed
+    # separately would run them concurrently. Put all commands in one screen
+    # script instead: each ``conda run`` blocks before the next seed begins.
+    if execution.use_screen and len(seeds) > 1:
+        session = make_screen_session(f"train-{experiment.environment}-{experiment.algorithm}-batch")
+        batch_lines = [
+            "source ~/.bashrc 2>/dev/null || true",
+            "shopt -s expand_aliases",
+        ]
+        for seed in seeds:
+            command = [
+                "python",
+                "robomimic/scripts/train.py",
+                "--config",
+                str(experiment.config_path.relative_to(REPO_ROOT)),
+                "--seed",
+                seed,
+            ]
+            _, _, printable_command = command_with_runtime(command, gpu, experiment.is_temporal)
+            print("\nCommand:")
+            print(f"  {printable_command}")
+            alert_prefix = (
+                "RoboMimic training failed: "
+                f"environment={experiment.environment}, algorithm={experiment.algorithm}, "
+                f"seed={seed}, gpu={gpu}"
+            )
+            # Do not proceed to another seed after a failure. ``eval`` parses
+            # the alias after .bashrc has been sourced, so it can invoke the
+            # user's ``vla_alert`` alias from this non-interactive shell.
+            batch_lines.extend(
+                [
+                    printable_command,
+                    "status=$?",
+                    'if [ "$status" -ne 0 ]; then',
+                    f"  alert_message={shlex.quote(alert_prefix)}",
+                    '  alert_message="${alert_message}; exit status ${status}"',
+                    "  eval 'vla_alert \"$alert_message\"' || true",
+                    '  exit "$status"',
+                    "fi",
+                ]
+            )
+        batch_script = "\n".join(batch_lines)
+        screen_command = (
+            f"cd {shlex.quote(str(REPO_ROOT))} && "
+            f"bash -c {shlex.quote(batch_script)}"
+        )
+        exit_code = start_screen_session(session, screen_command, dry_run=dry_run)
+        if exit_code:
+            print(f"Training batch exited with status {exit_code}.")
+        return
 
     for seed in seeds:
         command = [
@@ -655,7 +747,7 @@ def experiment_from_plan(plan: dict) -> Experiment:
     try:
         config_path.relative_to(CONFIG_ROOT)
     except ValueError as exc:
-        raise ValueError(f"Batch plan config is outside {CONFIG_ROOT}: {config_path}") from exc
+        raise ValueError(f"Evaluation plan config is outside {CONFIG_ROOT}: {config_path}") from exc
     return Experiment(
         environment=experiment_data["environment"],
         algorithm=experiment_data["algorithm"],
@@ -738,168 +830,6 @@ def run_evaluation_plan(plan: dict, dry_run: bool) -> None:
                     )
 
 
-def run_batch_plan(plan: dict, dry_run: bool) -> None:
-    """Train every seed, then evaluate the best checkpoint from every new run."""
-    experiment = experiment_from_plan(plan)
-    gpu = str(plan["gpu"])
-    training_seeds = [str(seed) for seed in plan["training_seeds"]]
-    evaluation_seed = str(plan["evaluation_seed"])
-    n_rollouts = str(plan["n_rollouts"])
-    archive_rollout_images = bool(plan.get("archive_rollout_images", False))
-    if not training_seeds:
-        raise ValueError("Batch plan must contain at least one training seed.")
-
-    existing_run_ids = {checkpoint.run_id for checkpoint in discover_checkpoints(experiment)}
-    print(
-        f"\nBatch workflow: {len(training_seeds)} training job(s), then one evaluation "
-        "for each newly created run."
-    )
-    for seed in training_seeds:
-        command = [
-            "python",
-            "robomimic/scripts/train.py",
-            "--config",
-            str(experiment.config_path.relative_to(REPO_ROOT)),
-            "--seed",
-            seed,
-        ]
-        exit_code = launch(
-            command,
-            gpu,
-            experiment.is_temporal,
-            dry_run,
-            confirm=False,
-            label=f"train-{experiment.environment}-{experiment.algorithm}-seed{seed}",
-        )
-        if exit_code:
-            print(f"Training seed {seed} exited with status {exit_code}.")
-
-    if dry_run:
-        print("Dry run: evaluations will be selected from the checkpoints created by these training jobs.")
-        return
-
-    new_checkpoints = [
-        checkpoint
-        for checkpoint in discover_checkpoints(experiment)
-        if checkpoint.run_id not in existing_run_ids
-    ]
-    new_checkpoints.sort(key=lambda checkpoint: checkpoint.run_id)
-    if not new_checkpoints:
-        print("No new checkpoints were found; evaluations were not launched.")
-        return
-    if len(new_checkpoints) != len(training_seeds):
-        print(
-            f"Found {len(new_checkpoints)} newly checkpointed run(s) after {len(training_seeds)} "
-            "training job(s); evaluating each discovered run."
-        )
-
-    for checkpoint in new_checkpoints:
-        dataset_path = rollout_output_path(experiment, checkpoint, evaluation_seed, multi_seed=False)
-        info_path = dataset_path.with_name(f"{dataset_path.stem}_info.txt")
-        command = [
-            "python",
-            "robomimic/scripts/run_trained_agent.py",
-            "--agent",
-            str(checkpoint.path),
-            "--dataset_path",
-            str(dataset_path),
-            "--n_rollouts",
-            n_rollouts,
-            "--seed",
-            evaluation_seed,
-            "--dataset_obs",
-        ]
-        dataset_path.parent.mkdir(parents=True, exist_ok=True)
-        write_eval_info(info_path, experiment, checkpoint, dataset_path, gpu, evaluation_seed, n_rollouts)
-        exit_code = launch(
-            command,
-            gpu,
-            experiment.is_temporal,
-            dry_run=False,
-            confirm=False,
-            label=f"eval-{experiment.environment}-{experiment.algorithm}-{checkpoint.run_id}",
-        )
-        if exit_code:
-            print(f"Evaluation for {checkpoint.run_id} exited with status {exit_code}.")
-            continue
-        if archive_rollout_images:
-            archive_exit_code = archive_evaluation_rollout(
-                dataset_path,
-                gpu,
-                experiment.is_temporal,
-                dry_run=False,
-            )
-            if archive_exit_code:
-                print(
-                    f"Image archival for {checkpoint.run_id} exited with status {archive_exit_code}; "
-                    "rollout images were retained."
-                )
-
-
-def run_train_then_evaluate(experiments: Sequence[Experiment], dry_run: bool) -> None:
-    """Collect a batch plan and run it locally or as one detached screen workflow."""
-    experiment = select_experiment(experiments)
-    if experiment is None:
-        return
-    gpu = prompt_gpu()
-    training_seeds = prompt_seeds("Training seed(s), comma-separated", default="1,2,3")
-    evaluation_seed = prompt_text(
-        "Evaluation rollout seed (used for every newly trained run)",
-        default="1000",
-        validator=lambda value: value.isdigit(),
-    )
-    default_n_rollouts = "200" if experiment.is_temporal else "100"
-    n_rollouts = prompt_text(
-        "Number of rollouts per newly trained run",
-        default=default_n_rollouts,
-        validator=lambda value: value.isdigit() and int(value) > 0,
-    )
-    execution = prompt_execution_mode()
-    if execution is None:
-        return
-    if not dry_run and not prompt_yes_no(
-        f"Run {len(training_seeds)} training job(s), then evaluate every newly created run?",
-        default=False,
-    ):
-        print("Skipped.")
-        return
-
-    plan = {
-        "experiment": {
-            "environment": experiment.environment,
-            "algorithm": experiment.algorithm,
-            "config_path": str(experiment.config_path.relative_to(REPO_ROOT)),
-            "split": experiment.split,
-        },
-        "gpu": gpu,
-        "training_seeds": training_seeds,
-        "evaluation_seed": evaluation_seed,
-        "n_rollouts": n_rollouts,
-        "archive_rollout_images": True,
-    }
-    if not execution.use_screen:
-        run_batch_plan(plan, dry_run=dry_run)
-        return
-
-    session = make_screen_session(f"batch-{experiment.environment}-{experiment.algorithm}")
-    plan_path = Path("/tmp") / f"{session}.json"
-    if not dry_run:
-        plan_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
-    coordinator_command = [
-        conda_executable(),
-        "run",
-        "--no-capture-output",
-        "-n",
-        BASE_CONDA_ENV,
-        "python",
-        "robomimic/scripts/experiment_cli.py",
-        "--run-batch-plan",
-        str(plan_path),
-    ]
-    command = f"cd {shlex.quote(str(REPO_ROOT))} && {shlex.join(coordinator_command)}"
-    start_screen_session(session, command, dry_run=dry_run)
-
-
 def select_progress_runs_for_deletion():
     # Reuse the progress report's own collection, sorting, and status logic so
     # the deletion menu reports the same state as ``check_progress.py``.
@@ -978,21 +908,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="Print commands without launching them or writing metadata.")
     parser.add_argument(
-        "--run-batch-plan",
-        type=Path,
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
         "--run-evaluation-plan",
         type=Path,
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
 
-    if args.run_batch_plan is not None:
-        with args.run_batch_plan.open(encoding="utf-8") as file:
-            run_batch_plan(json.load(file), dry_run=args.dry_run)
-        return
     if args.run_evaluation_plan is not None:
         with args.run_evaluation_plan.open(encoding="utf-8") as file:
             run_evaluation_plan(json.load(file), dry_run=args.dry_run)
@@ -1009,7 +930,6 @@ def main() -> None:
                 [
                     "Train",
                     "Evaluate",
-                    "Train then evaluate",
                     "Run analysis",
                     "Check training progress",
                     "Check rollout progress",
@@ -1023,8 +943,6 @@ def main() -> None:
                 run_training(experiments, args.dry_run)
             elif action == "Evaluate":
                 run_evaluation(experiments, args.dry_run)
-            elif action == "Train then evaluate":
-                run_train_then_evaluate(experiments, args.dry_run)
             elif action == "Run analysis":
                 run_analysis(args.dry_run)
             elif action == "Check training progress":

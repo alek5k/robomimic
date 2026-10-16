@@ -540,8 +540,20 @@ class RolloutPolicy(object):
             # ensure obs_normalization_stats are torch Tensors on proper device
             obs_normalization_stats = TensorUtils.to_float(TensorUtils.to_device(TensorUtils.to_tensor(self.obs_normalization_stats), self.policy.device))
             # limit normalization to obs keys being used, in case environment includes extra keys
+            # Learned temporal encoders use one raw auxiliary signal to update
+            # their recurrent state. It is not a policy observation modality.
+            temporal_aux = {}
+            if getattr(self.policy, "learned_temporal_enabled", False):
+                signal_key = (
+                    "agent_velocity"
+                    if self.policy.learned_temporal_cfg.input_signal == "velocity"
+                    else "direct_idleness"
+                )
+                if signal_key in ob:
+                    temporal_aux[signal_key] = ob[signal_key]
             ob = { k : ob[k] for k in self.policy.global_config.all_obs_keys }
             ob = ObsUtils.normalize_dict(ob, normalization_stats=obs_normalization_stats)
+            ob.update(temporal_aux)
         # postprocess visual observations
         if postprocess_visual_obs:
             for k in ob:

@@ -343,11 +343,17 @@ def wrap_env_from_config(env, config):
     to use (if any).
     """
 
-    needs_temporal = ("temporal_encodings" in config.observation) and ("modalities" in config.observation) and any(k in set(config.observation.modalities.obs.low_dim) for k in [
-        "sinusoidal_progress_encoding",
-        "saturating_progress_encoding",
-        "idleness",
-    ])
+    temporal_config = config.observation.get("temporal_encodings", {})
+    learned_enabled = bool(temporal_config.get("learned_encoder", {}).get("enabled", False))
+    needs_temporal = ("temporal_encodings" in config.observation) and ("modalities" in config.observation) and (
+        learned_enabled or any(k in set(config.observation.modalities.obs.low_dim) for k in [
+            "sinusoidal_progress_encoding",
+            "saturating_progress_encoding",
+            "idleness",
+            "direct_idleness",
+            "time_signal",
+        ])
+    )
     if needs_temporal:
         env = TemporalEncodingWrapper(env, temporal_encoding_config=config.observation["temporal_encodings"])
 

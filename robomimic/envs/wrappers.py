@@ -231,20 +231,40 @@ class TemporalEncodingWrapper(EnvWrapper):
         super(TemporalEncodingWrapper, self).__init__(env=env)
 
         self.temporal_encoding_config = temporal_encoding_config or {}
+        learned_cfg = self.temporal_encoding_config.get("learned_encoder", {})
+        self._learned_temporal_enabled = bool(learned_cfg.get("enabled", False))
+        self._learned_temporal_signal = learned_cfg.get("input_signal", "velocity")
+        self._learned_temporal_uses_image = (
+            self._learned_temporal_signal == "image_embedding"
+            or bool(learned_cfg.get("use_image_embedding", False))
+        )
+        needs_velocity = any((
+            self.temporal_encoding_config.get("use_idleness_encoding", False),
+            self.temporal_encoding_config.get("use_direct_idleness", False),
+            self._learned_temporal_enabled and not self._learned_temporal_uses_image,
+        ))
+        self._idleness_vmax = self.temporal_encoding_config.get("max_train_set_agent_velocity")
+        if needs_velocity and self._idleness_vmax is None:
+            raise ValueError("Temporal idleness features require max_train_set_agent_velocity")
+        self._idleness_encoder = None
+        if self.temporal_encoding_config.get("use_idleness_encoding", False):
+            alpha = self.temporal_encoding_config.get("idleness_alpha", None)
+            if alpha is None:
+                alpha = calculate_growth_rate_parameter(max_steps=self.temporal_encoding_config["max_train_set_steps"])
+            self._idleness_encoder = IdlenessEncoder(
+                vmax=self._idleness_vmax,
+                rest_thresh=self.temporal_encoding_config["idleness_rest_thresh"], alpha=alpha,
+            )
 
-        alpha = self.temporal_encoding_config.get("idleness_alpha", None)
-        if alpha is None:
-            alpha = calculate_growth_rate_parameter(max_steps=self.temporal_encoding_config["max_train_set_steps"])
-        self._idleness_vmax = self.temporal_encoding_config["max_train_set_agent_velocity"]
-        assert self._idleness_vmax is not None, "Must provide max_train_set_agent_velocity in temporal_encoding_config for idleness encoding"
-        self._idleness_encoder = IdlenessEncoder(vmax=self._idleness_vmax, rest_thresh=self.temporal_encoding_config["idleness_rest_thresh"], alpha=alpha)
-
-        omega = self.temporal_encoding_config.get("saturating_omega", None)
-        if omega is None:
-            assert self.temporal_encoding_config["max_train_set_steps"] is not None, "Must provide max_train_set_steps in temporal_encoding_config to auto-compute saturating_omega"
-            max_steps = self.temporal_encoding_config["max_train_set_steps"]
-            omega = calculate_growth_rate_parameter(max_steps=max_steps)
-        self._saturating_progress_omega = omega
+        self._saturating_progress_omega = None
+        if self.temporal_encoding_config.get("use_saturating_progress_encoding", False):
+            omega = self.temporal_encoding_config.get("saturating_omega", None)
+            if omega is None:
+                max_steps = self.temporal_encoding_config.get("max_train_set_steps")
+                if max_steps is None:
+                    raise ValueError("Saturating progress requires max_train_set_steps")
+                omega = calculate_growth_rate_parameter(max_steps=max_steps)
+            self._saturating_progress_omega = omega
 
         self._timestep = 0
 
@@ -261,6 +281,25 @@ class TemporalEncodingWrapper(EnvWrapper):
 
         obs["agent_velocity"] = np.array([velocity], dtype=np.float32)
 
+        if self.temporal_encoding_config.get("use_direct_time", False) or (
+            self._learned_temporal_enabled and not self._learned_temporal_uses_image
+        ):
+            max_steps = self.temporal_encoding_config.get("max_train_set_steps")
+            if max_steps is None or max_steps <= 0:
+                raise ValueError("Direct time requires a positive max_train_set_steps")
+            obs["time_signal"] = np.array(
+                [2.0 * self._timestep / float(max_steps) - 1.0], dtype=np.float32
+            )
+
+        if (
+            self.temporal_encoding_config.get("use_direct_idleness", False)
+            or (self._learned_temporal_enabled and self._learned_temporal_signal == "idle_indicator")
+        ):
+            threshold = self.temporal_encoding_config.get("idleness_rest_thresh", 0.03)
+            obs["direct_idleness"] = np.array(
+                [float(abs(velocity) / self._idleness_vmax < threshold)], dtype=np.float32
+            )
+
         if self.temporal_encoding_config.get("use_sinusoidal_progress_encoding", False):
             pe = progress_positional_encoding_transformer(t=self._timestep, d_model=self.temporal_encoding_config["sinusoidal_dim"])
             obs["sinusoidal_progress_encoding"] = pe.reshape(-1).astype(np.float32) # flatten to 1D array
@@ -274,14 +313,16 @@ class TemporalEncodingWrapper(EnvWrapper):
 
     def reset(self):
         obs = self.env.reset()
-        self._idleness_encoder.reset()
+        if self._idleness_encoder is not None:
+            self._idleness_encoder.reset()
         self._timestep = 0
         self._update_temporal_encodings(obs)
         return obs
 
     def reset_to(self, state):
         obs = self.env.reset_to(state)
-        self._idleness_encoder.reset()
+        if self._idleness_encoder is not None:
+            self._idleness_encoder.reset()
         self._timestep = 0
         self._update_temporal_encodings(obs)
         return obs

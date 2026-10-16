@@ -318,12 +318,45 @@ class BaseConfig(Config):
         self.observation.temporal_encodings.use_sinusoidal_progress_encoding = False
         self.observation.temporal_encodings.use_saturating_progress_encoding = False
         self.observation.temporal_encodings.use_idleness_encoding = False
+        # Direct inputs are intentionally separate from the learned encoder so
+        # experiments can ablate the learned representation against them.
+        self.observation.temporal_encodings.use_direct_time = False
+        self.observation.temporal_encodings.use_direct_idleness = False
         self.observation.temporal_encodings.sinusoidal_dim = 128
         self.observation.temporal_encodings.saturating_omega = None  # None => auto-compute
         self.observation.temporal_encodings.idleness_rest_thresh = 0.03
         self.observation.temporal_encodings.idleness_alpha = None    # None => auto-compute
         self.observation.temporal_encodings.max_train_set_steps = None  # None 
         self.observation.temporal_encodings.max_train_set_agent_velocity = None  # None 
+        self.observation.temporal_encodings.learned_encoder = Config()
+        self.observation.temporal_encodings.learned_encoder.enabled = False
+        self.observation.temporal_encodings.learned_encoder.latent_dim = 32
+        self.observation.temporal_encodings.learned_encoder.hidden_dim = 128
+        self.observation.temporal_encodings.learned_encoder.recurrent = True
+        # LTE's default ablation is image-only, without an explicit timestep.
+        self.observation.temporal_encodings.learned_encoder.input_signal = "image_embedding"
+        self.observation.temporal_encodings.learned_encoder.use_image_embedding = True
+        self.observation.temporal_encodings.learned_encoder.use_timestep_signal = False
+        # The first N RGB observations in the policy's configured order feed
+        # LTE. Diffusion Policy itself continues to use every RGB observation.
+        # ``None`` opts into all configured cameras.
+        self.observation.temporal_encodings.learned_encoder.num_images = 1
+        # Multi-camera LTE concatenates features by default. Enable this only
+        # for the learned pre-recurrence fusion ablation.
+        self.observation.temporal_encodings.learned_encoder.multi_image_fusion = False
+        self.observation.temporal_encodings.learned_encoder.image_embedding_fusion_dim = 512
+        self.observation.temporal_encodings.learned_encoder.image_embedding_fusion_hidden_dim = 512
+        self.observation.temporal_encodings.learned_encoder.cache_image_embeddings = True
+        self.observation.temporal_encodings.learned_encoder.image_embedding_cache_start_epoch = 5
+        self.observation.temporal_encodings.learned_encoder.image_embedding_cache_warmup_epochs = 20
+        self.observation.temporal_encodings.learned_encoder.image_embedding_cache_refresh_epochs = 5
+        self.observation.temporal_encodings.learned_encoder.idle_threshold = 0.03
+        self.observation.temporal_encodings.learned_encoder.history_reconstruction = Config()
+        self.observation.temporal_encodings.learned_encoder.history_reconstruction.enabled = True
+        self.observation.temporal_encodings.learned_encoder.history_reconstruction.lambda_history = 1.0
+        self.observation.temporal_encodings.learned_encoder.history_reconstruction.num_history_queries = 16
+        self.observation.temporal_encodings.learned_encoder.history_reconstruction.do_not_lock_keys()
+        self.observation.temporal_encodings.learned_encoder.do_not_lock_keys()
         self.observation.temporal_encodings.do_not_lock_keys()
 
     def meta_config(self):

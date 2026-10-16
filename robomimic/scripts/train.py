@@ -25,6 +25,7 @@ import psutil
 import sys
 import socket
 import traceback
+from pathlib import Path
 
 from collections import OrderedDict
 
@@ -41,6 +42,34 @@ import robomimic.utils.file_utils as FileUtils
 from robomimic.config import config_factory
 from robomimic.algo import algo_factory, RolloutPolicy
 from robomimic.utils.log_utils import PrintLogger, DataLogger, flush_warnings
+
+
+def autoclean_superseded_model_checkpoints(ckpt_dir, retained_checkpoint_path, reason):
+    """Replace superseded archive checkpoints with small, auditable tombstones."""
+    retained_path = Path(retained_checkpoint_path).resolve()
+    for checkpoint_path in sorted(Path(ckpt_dir).glob("model_epoch_*.pth")):
+        if checkpoint_path.resolve() == retained_path:
+            continue
+        checkpoint_size = checkpoint_path.stat().st_size
+        marker_path = checkpoint_path.with_name(
+            f"{checkpoint_path.stem}_autocleaned.txt"
+        )
+        checkpoint_path.unlink()
+        marker_path.write_text(
+            "\n".join((
+                f"original_checkpoint: {checkpoint_path.name}",
+                f"deleted_at: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                f"replaced_by: {retained_path.name}",
+                f"reason: better_{reason}",
+                f"reclaimed_bytes: {checkpoint_size}",
+                "",
+            )),
+            encoding="utf-8",
+        )
+        print(
+            f"Autocleaned superseded checkpoint {checkpoint_path.name}; "
+            f"recorded replacement in {marker_path.name}."
+        )
 
 
 def train(config, device, resume=False):
@@ -240,6 +269,10 @@ def train(config, device, resume=False):
         ac_dim=shape_meta_list[0]["ac_dim"],
         device=device
     )
+    # LTE-IMG-NoT carries image indices through DataLoader workers and builds
+    # its detached visual cache in the main process.
+    if hasattr(model, "set_temporal_image_dataset"):
+        model.set_temporal_image_dataset(trainset, validset)
 
     if resume:
         # load ckpt dict
@@ -315,6 +348,7 @@ def train(config, device, resume=False):
 
         # check for recurring checkpoint saving conditions
         should_save_ckpt = False
+        checkpoint_is_improvement = False
         if config.experiment.save.enabled:
             time_check = (config.experiment.save.every_n_seconds is not None) and \
                 (time.time() - last_ckpt_time > config.experiment.save.every_n_seconds)
@@ -362,6 +396,7 @@ def train(config, device, resume=False):
                 if config.experiment.save.enabled and config.experiment.save.on_best_validation:
                     epoch_ckpt_name += "_best_validation_{}".format(best_valid_loss)
                     should_save_ckpt = True
+                    checkpoint_is_improvement = True
                     ckpt_reason = "valid" if ckpt_reason is None else ckpt_reason
 
         # Evaluate the model by by running rollouts
@@ -417,6 +452,9 @@ def train(config, device, resume=False):
             best_success_rate = updated_stats["best_success_rate"]
             epoch_ckpt_name = updated_stats["epoch_ckpt_name"]
             should_save_ckpt = (config.experiment.save.enabled and updated_stats["should_save_ckpt"]) or should_save_ckpt
+            checkpoint_is_improvement = checkpoint_is_improvement or (
+                config.experiment.save.enabled and updated_stats["should_save_ckpt"]
+            )
             if updated_stats["ckpt_reason"] is not None:
                 ckpt_reason = updated_stats["ckpt_reason"]
 
@@ -433,30 +471,39 @@ def train(config, device, resume=False):
         )
 
         # Save model checkpoints based on conditions (success rate, validation loss, etc)
-        if should_save_ckpt:    
+        if should_save_ckpt:
+            checkpoint_path = os.path.join(ckpt_dir, epoch_ckpt_name + ".pth")
             TrainUtils.save_model(
                 model=model,
                 config=config,
                 env_meta=env_meta_list[0] if len(env_meta_list)==1 else env_meta_list,
                 shape_meta=shape_meta_list[0] if len(shape_meta_list)==1 else shape_meta_list,
                 variable_state=variable_state,
-                ckpt_path=os.path.join(ckpt_dir, epoch_ckpt_name + ".pth"),
+                ckpt_path=checkpoint_path,
                 obs_normalization_stats=obs_normalization_stats,
                 action_normalization_stats=action_normalization_stats,
             )
+            if checkpoint_is_improvement:
+                autoclean_superseded_model_checkpoints(
+                    ckpt_dir=ckpt_dir,
+                    retained_checkpoint_path=checkpoint_path,
+                    reason=ckpt_reason or "metric",
+                )
 
-        # always save latest model for resume functionality
-        print("\nsaving latest model at {}...\n".format(latest_model_path))
-        TrainUtils.save_model(
-            model=model,
-            config=config,
-            env_meta=env_meta_list[0] if len(env_meta_list)==1 else env_meta_list,
-            shape_meta=shape_meta_list[0] if len(shape_meta_list)==1 else shape_meta_list,
-            variable_state=variable_state,
-            ckpt_path=latest_model_path,
-            obs_normalization_stats=obs_normalization_stats,
-            action_normalization_stats=action_normalization_stats,
-        )
+        # Deliberately disabled: serializing the full resume checkpoint every
+        # epoch creates substantial write traffic. Use an archive checkpoint
+        # selected by the configured save policy instead.
+        # print("\nsaving latest model at {}...\n".format(latest_model_path))
+        # TrainUtils.save_model(
+        #     model=model,
+        #     config=config,
+        #     env_meta=env_meta_list[0] if len(env_meta_list)==1 else env_meta_list,
+        #     shape_meta=shape_meta_list[0] if len(shape_meta_list)==1 else shape_meta_list,
+        #     variable_state=variable_state,
+        #     ckpt_path=latest_model_path,
+        #     obs_normalization_stats=obs_normalization_stats,
+        #     action_normalization_stats=action_normalization_stats,
+        # )
 
         # keep a backup model in case last.pth is malformed (e.g. job died last time during saving)
         # shutil.copyfile(latest_model_path, latest_model_backup_path)

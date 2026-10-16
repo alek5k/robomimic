@@ -156,6 +156,8 @@ def get_shape_metadata_from_dataset(dataset_config, action_keys, all_obs_keys=No
     if temporal_cfg is not None:
         synthetic_shapes = {
             "idleness": (1,),
+            "direct_idleness": (1,),
+            "time_signal": (1,),
             "saturating_progress_encoding": (1,),
             "sinusoidal_progress_encoding": (temporal_cfg.get("sinusoidal_dim"),),
         }

@@ -42,12 +42,8 @@ python robomimic/scripts/generate_paper_configs.py
 `python robomimic/scripts/experiment_cli.py` or `rmcli` if defined in aliases
 robomimic_cli
 Use `--dry-run` to inspect the constructed command without launching it.
-Choose **Train then evaluate** to run every requested training seed in order,
-then evaluate each newly created checkpoint in order (for example,
-train/train/train followed by eval/eval/eval). Each training, evaluation, and
-analysis launch lets you choose foreground execution or a detached `screen`
-session. The batch action uses one screen session for the entire ordered
-workflow; attach with the session name printed by the launcher.
+Each training, evaluation, and analysis launch lets you choose foreground
+execution or a detached `screen` session.
 The **Evaluate** action accepts one or more comma-separated timestamped runs
 and executes them in the order selected. Detached evaluation uses one screen
 session, so it preserves that same sequential order.

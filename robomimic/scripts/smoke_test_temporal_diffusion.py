@@ -70,6 +70,8 @@ def smoke_test(config_path, inference_timesteps=10):
         ac_dim=shape_meta["ac_dim"],
         device=device,
     )
+    if hasattr(model, "set_temporal_image_dataset"):
+        model.set_temporal_image_dataset(trainset)
     batch = model.process_batch_for_training(batch)
     batch = model.postprocess_batch_for_training(batch, obs_normalization_stats=None)
     train_info = model.train_on_batch(batch=batch, epoch=1, validate=False)
@@ -94,7 +96,11 @@ def smoke_test(config_path, inference_timesteps=10):
             terminate_on_success=True,
         )
     finally:
-        env.close()
+        # Some supported robosuite wrappers do not expose close().
+        try:
+            env.close()
+        except AttributeError:
+            pass
 
     print(
         "PASS: {} | loss={:.6f} | rollout={}".format(
