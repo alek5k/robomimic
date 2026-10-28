@@ -156,7 +156,7 @@ def create_tex_table_from_results(
     }
     metric_headers = {
         "W_episode": r"$W_{\text{episode}}$",
-        "success_rate": r"Success Rate (\%)",
+        "success_rate": r"Success (\%)",
     }
     metrics = ["W_episode"] + (["success_rate"] if include_success else [])
     datasets = [r for r in results.values() if not r.is_demo_dataset]
@@ -186,7 +186,6 @@ def create_tex_table_from_results(
         )
         for env in env_order
     }
-
     def fmt_cell(env: str, d: ParsedDatasetInfo | None, metric: str):
         if d is None:
             return "x"
@@ -198,8 +197,8 @@ def create_tex_table_from_results(
         if metric == "success_rate":
             ci95 = d.success_rate_ci95
             if ci95 is None:
-                return rf"\textcolor{{lightgray}}{{{float(value):.1f}\%}}"
-            return rf"\textcolor{{lightgray}}{{${float(value):.1f} \pm {float(ci95):.1f}\%$}}"
+                return rf"{float(value):.1f}\%"
+            return rf"${float(value):.1f} \pm {float(ci95):.1f}\%$"
 
         text = f"{float(value):.2f}"
         if abs(float(value) - mins[env]) < 5e-3:
@@ -226,7 +225,7 @@ def create_tex_table_from_results(
     \\midrule
     """).strip())
     for method in methods:
-        row = [method]
+        row = [r"DP~\cite{chi_diffusion_2024}" if method == "DP" else method]
         for env in env_order:
             dataset = groups[method].get(env)
             row.extend(fmt_cell(env, dataset, metric) for metric in metrics)
