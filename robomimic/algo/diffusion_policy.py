@@ -16,15 +16,6 @@ from diffusers.training_utils import EMAModel
 
 import robomimic.models.obs_nets as ObsNets
 import robomimic.models.diffusion_policy_nets as DPNets
-from robomimic.models.learned_temporal import (
-    TemporalEncoder,
-    HistoryDecoder,
-    ImageEmbeddingFusion,
-    MultiImageHistoryDecoder,
-    gather_history_latents,
-    history_reconstruction_loss,
-    multi_image_history_reconstruction_loss,
-)
 import robomimic.utils.tensor_utils as TensorUtils
 import robomimic.utils.torch_utils as TorchUtils
 import robomimic.utils.obs_utils as ObsUtils
@@ -59,32 +50,6 @@ def algo_config_to_class(algo_config):
 
 
 class DiffusionPolicyUNet(PolicyAlgo):
-    def _create_optimizers(self):
-        """Put LTE-only modules in DP's policy optimizer as well.
-
-        The base DP config intentionally has one ``policy`` optimizer, while
-        LTE adds modules outside ``nets['policy']``. Without this, they would
-        receive gradients but never take an optimizer step.
-        """
-        super(DiffusionPolicyUNet, self)._create_optimizers()
-        if getattr(self, "learned_temporal_enabled", False):
-            extra_modules = [self.nets["temporal_encoder"]]
-            if "temporal_image_fusion" in self.nets:
-                extra_modules.append(self.nets["temporal_image_fusion"])
-            if "history_decoder" in self.nets:
-                extra_modules.append(self.nets["history_decoder"])
-            extra_params = [param for module in extra_modules for param in module.parameters()]
-            if extra_params:
-                self.optimizers["policy"].add_param_group({"params": extra_params})
-                # The base class constructed this scheduler before LTE added
-                # its parameter group. Recreate it so every group receives a
-                # scheduled learning rate during the first optimizer step.
-                self.lr_schedulers["policy"] = TorchUtils.lr_scheduler_from_optim_params(
-                    net_optim_params=self.optim_params["policy"],
-                    net=self.nets["policy"],
-                    optimizer=self.optimizers["policy"],
-                )
-
     def _create_networks(self):
         """
         Creates networks and places them into @self.nets.
@@ -104,83 +69,11 @@ class DiffusionPolicyUNet(PolicyAlgo):
         obs_encoder = replace_bn_with_gn(obs_encoder)
         
         obs_dim = obs_encoder.output_shape()[0]
-        temporal_cfg = self.obs_config.temporal_encodings.learned_encoder
-        self.learned_temporal_enabled = bool(temporal_cfg.enabled)
-        self.learned_temporal_cfg = temporal_cfg
-        self.learned_temporal_uses_image_embeddings = self.learned_temporal_enabled and (
-            temporal_cfg.input_signal == "image_embedding" or bool(temporal_cfg.use_image_embedding)
-        )
-        all_image_keys = [
-            key for key in self.obs_shapes if ObsUtils.key_is_obs_modality(key, "rgb")
-        ]
-        if self.learned_temporal_uses_image_embeddings:
-            requested_images = getattr(temporal_cfg, "num_images", 1)
-            if requested_images is None:
-                temporal_image_count = len(all_image_keys)
-            elif (
-                isinstance(requested_images, bool)
-                or not isinstance(requested_images, int)
-                or not 1 <= requested_images <= len(all_image_keys)
-            ):
-                raise ValueError(
-                    "learned_encoder.num_images must be between 1 and the number "
-                    "of configured RGB observations, or null for all"
-                )
-            else:
-                temporal_image_count = requested_images
-            self.temporal_image_keys = all_image_keys[:temporal_image_count]
-        else:
-            self.temporal_image_keys = all_image_keys
-        temporal_encoder = None
-        history_decoder = None
-        temporal_dim = 0
-        if self.learned_temporal_enabled:
-            if self.learned_temporal_uses_image_embeddings and not self.temporal_image_keys:
-                raise ValueError("LTE-IMG-NoT requires at least one rgb observation key")
-            image_embedding_dims = []
-            if self.learned_temporal_uses_image_embeddings:
-                image_encoder = obs_encoder.nets["obs"]
-                image_embedding_dims = [
-                    int(image_encoder.obs_nets[key].output_shape(self.obs_shapes[key])[0])
-                    for key in self.temporal_image_keys
-                ]
-                use_temporal_image_fusion = (
-                    len(image_embedding_dims) > 1
-                    and bool(getattr(temporal_cfg, "multi_image_fusion", False))
-                )
-                image_embedding_dim = (
-                    int(temporal_cfg.image_embedding_fusion_dim)
-                    if use_temporal_image_fusion else sum(image_embedding_dims)
-                )
-            else:
-                image_embedding_dim = 0
-            temporal_encoder = TemporalEncoder(
-                time_dim=0 if self.learned_temporal_uses_image_embeddings else 1,
-                signal_dim=0 if self.learned_temporal_uses_image_embeddings else 1,
-                image_embedding_dim=image_embedding_dim,
-                latent_dim=temporal_cfg.latent_dim,
-                hidden_dim=temporal_cfg.hidden_dim,
-                recurrent=temporal_cfg.recurrent,
-            )
-            temporal_dim = int(temporal_cfg.latent_dim)
-            if temporal_cfg.history_reconstruction.enabled:
-                if self.learned_temporal_uses_image_embeddings and use_temporal_image_fusion:
-                    history_decoder = MultiImageHistoryDecoder(
-                        latent_dim=temporal_cfg.latent_dim,
-                        image_embedding_dims=image_embedding_dims,
-                        hidden_dim=temporal_cfg.hidden_dim,
-                    )
-                else:
-                    history_decoder = HistoryDecoder(
-                        latent_dim=temporal_cfg.latent_dim,
-                        signal_dim=(image_embedding_dim if self.learned_temporal_uses_image_embeddings else 1),
-                        hidden_dim=temporal_cfg.hidden_dim,
-                    )
 
         # create network object
         noise_pred_net = DPNets.ConditionalUnet1D(
             input_dim=self.ac_dim,
-            global_cond_dim=(obs_dim + temporal_dim) * self.algo_config.horizon.observation_horizon
+            global_cond_dim=obs_dim*self.algo_config.horizon.observation_horizon
         )
 
         # the final arch has 2 parts
@@ -190,16 +83,6 @@ class DiffusionPolicyUNet(PolicyAlgo):
                 "noise_pred_net": noise_pred_net
             })
         })
-        if temporal_encoder is not None:
-            nets["temporal_encoder"] = temporal_encoder
-        if self.learned_temporal_uses_image_embeddings and use_temporal_image_fusion:
-            nets["temporal_image_fusion"] = ImageEmbeddingFusion(
-                image_embedding_dims,
-                output_dim=int(temporal_cfg.image_embedding_fusion_dim),
-                hidden_dim=int(temporal_cfg.image_embedding_fusion_hidden_dim),
-            )
-        if history_decoder is not None:
-            nets["history_decoder"] = history_decoder
 
         nets = nets.float().to(self.device)
         
@@ -236,91 +119,6 @@ class DiffusionPolicyUNet(PolicyAlgo):
         self.action_check_done = False
         self.obs_queue = None
         self.action_queue = None
-        self.temporal_latent_queue = None
-        self.temporal_z_prev = None
-        self._temporal_image_dataset = None
-        self._temporal_validation_image_dataset = None
-        self._history_image_embedding_cache = None
-        self._history_image_cache_epoch = None
-
-    def set_temporal_image_dataset(self, dataset, validation_dataset=None):
-        """Attach the training dataset used to build LTE's detached GPU cache."""
-        if self.learned_temporal_uses_image_embeddings:
-            self._temporal_image_dataset = dataset
-            self._temporal_validation_image_dataset = validation_dataset
-
-    @staticmethod
-    def _temporal_image_cache_should_refresh(cfg, cache, cache_epoch, epoch):
-        """Mirror TemporalDiffusionPolicy's warm-up and periodic refresh schedule."""
-        epoch_index = int(epoch) - 1
-        if epoch_index < int(cfg.image_embedding_cache_start_epoch):
-            return False
-        if cache is None:
-            return True
-        warmup_end = int(cfg.image_embedding_cache_start_epoch) + int(cfg.image_embedding_cache_warmup_epochs)
-        return epoch_index < warmup_end or (epoch_index - warmup_end) % int(cfg.image_embedding_cache_refresh_epochs) == 0
-
-    def _encode_temporal_image_views(self, images, nets=None):
-        """Run the policy's per-camera visual towers, without altering DP features."""
-        nets = self.nets if nets is None else nets
-        encoder = nets["policy"]["obs_encoder"].nets["obs"]
-        embeddings = []
-        for key, image in zip(self.temporal_image_keys, images):
-            value = image
-            for randomizer in encoder.obs_randomizers[key]:
-                if randomizer is not None:
-                    value = randomizer.forward_in(value)
-            value = encoder.obs_nets[key](value)
-            if encoder.activation is not None:
-                value = encoder.activation(value)
-            for randomizer in reversed(encoder.obs_randomizers[key]):
-                if randomizer is not None:
-                    value = randomizer.forward_out(value)
-            embeddings.append(TensorUtils.flatten(value, begin_axis=1))
-        return embeddings
-
-    def _fetch_temporal_image_views(self, indices, dataset):
-        if dataset is None:
-            raise RuntimeError("LTE-IMG-NoT training requires its SequenceDataset to be attached")
-        indices = indices.detach().cpu().numpy()
-        batches = dataset.get_temporal_image_batch(indices, self.temporal_image_keys)
-        tensors = [torch.from_numpy(batches[key]).to(self.device, dtype=torch.float32) for key in self.temporal_image_keys]
-        with torch.no_grad():
-            return [embedding.detach() for embedding in self._encode_temporal_image_views(tensors)]
-
-    def _build_history_image_embedding_cache(self):
-        dataset = self._temporal_image_dataset
-        if dataset is None:
-            raise RuntimeError("LTE-IMG-NoT image cache has no training dataset")
-        embedding_chunks = [[] for _ in self.temporal_image_keys]
-        with torch.no_grad():
-            for start in range(0, dataset._temporal_num_images, 256):
-                indices = torch.arange(start, min(start + 256, dataset._temporal_num_images), device=self.device)
-                views = self._fetch_temporal_image_views(indices, dataset)
-                for chunks, view in zip(embedding_chunks, views):
-                    chunks.append(view)
-        return [torch.cat(chunks, dim=0) for chunks in embedding_chunks]
-
-    def _get_history_image_embeddings(self, history_indices, history_mask, epoch, validate):
-        dataset = self._temporal_validation_image_dataset if validate else self._temporal_image_dataset
-        use_cache = bool(self.learned_temporal_cfg.cache_image_embeddings) and not validate
-        if use_cache and self._temporal_image_cache_should_refresh(
-                self.learned_temporal_cfg, self._history_image_embedding_cache,
-                self._history_image_cache_epoch, epoch):
-            self._history_image_embedding_cache = self._build_history_image_embedding_cache()
-            self._history_image_cache_epoch = int(epoch)
-        batch_size, history_length = history_indices.shape
-        valid_indices = history_indices[history_mask]
-        if use_cache and self._history_image_embedding_cache is not None:
-            encoded = [cache[valid_indices.long()] for cache in self._history_image_embedding_cache]
-        else:
-            encoded = self._fetch_temporal_image_views(valid_indices, dataset)
-        views = []
-        for values in encoded:
-            history = torch.zeros(batch_size, history_length, values.shape[-1], device=self.device, dtype=values.dtype)
-            history[history_mask] = values
-            views.append(history)
-        return views
     
     def process_batch_for_training(self, batch):
         """
@@ -340,21 +138,9 @@ class DiffusionPolicyUNet(PolicyAlgo):
         Tp = self.algo_config.horizon.prediction_horizon
 
         input_batch = dict()
-        # Datasets may load auxiliary velocity solely to form temporal history.
-        # Keep it out of the regular observation pipeline and its statistics.
-        input_batch["obs"] = {k: batch["obs"][k][:, :To, :] for k in self.obs_shapes}
+        input_batch["obs"] = {k: batch["obs"][k][:, :To, :] for k in batch["obs"]}
         input_batch["goal_obs"] = batch.get("goal_obs", None) # goals may not be present
         input_batch["actions"] = batch["actions"][:, :Tp, :]
-        if self.learned_temporal_enabled:
-            for key in (
-                "temporal_history_time",
-                "temporal_history_signal",
-                "temporal_history_mask",
-                "temporal_obs_history_indices",
-            ):
-                input_batch[key] = batch[key]
-            if self.learned_temporal_uses_image_embeddings:
-                input_batch["temporal_history_image_indices"] = batch["temporal_history_image_indices"]
         
         # check if actions are normalized to [-1,1]
         if not self.action_check_done:
@@ -407,45 +193,6 @@ class DiffusionPolicyUNet(PolicyAlgo):
             obs_features = TensorUtils.time_distributed(inputs, self.nets["policy"]["obs_encoder"], inputs_as_kwargs=True)
             assert obs_features.ndim == 3  # [B, T, D]
 
-            loss_history = torch.zeros((), device=self.device)
-            if self.learned_temporal_enabled:
-                history_time = batch["temporal_history_time"]
-                history_signal = batch["temporal_history_signal"]
-                history_mask = batch["temporal_history_mask"].bool()
-                history_indices = batch["temporal_obs_history_indices"].long()
-                if self.learned_temporal_uses_image_embeddings:
-                    history_views = self._get_history_image_embeddings(
-                        batch["temporal_history_image_indices"], history_mask, epoch, validate
-                    )
-                    image_embeddings = (
-                        self.nets["temporal_image_fusion"](history_views)
-                        if "temporal_image_fusion" in self.nets else torch.cat(history_views, dim=-1)
-                    )
-                    history_latents = self.nets["temporal_encoder"].encode_history(
-                        history_time[..., :0], valid_mask=history_mask,
-                        image_embeddings=image_embeddings,
-                    )
-                else:
-                    history_latents = self.nets["temporal_encoder"].encode_history(
-                        history_time, history_signal, history_mask
-                    )
-                temporal_latents = gather_history_latents(history_latents, history_indices)
-                obs_features = torch.cat([obs_features, temporal_latents], dim=-1)
-                if "history_decoder" in self.nets:
-                    if self.learned_temporal_uses_image_embeddings and "temporal_image_fusion" in self.nets:
-                        loss_history = multi_image_history_reconstruction_loss(
-                            self.nets["history_decoder"], temporal_latents, history_time,
-                            history_views, history_indices,
-                            self.learned_temporal_cfg.history_reconstruction.num_history_queries,
-                        )
-                    else:
-                        loss_history = history_reconstruction_loss(
-                            self.nets["history_decoder"], temporal_latents, history_time,
-                            image_embeddings if self.learned_temporal_uses_image_embeddings else history_signal,
-                            history_indices,
-                            self.learned_temporal_cfg.history_reconstruction.num_history_queries,
-                        )
-
             obs_cond = obs_features.flatten(start_dim=1)
             
             # sample noise to add to actions
@@ -467,17 +214,11 @@ class DiffusionPolicyUNet(PolicyAlgo):
                 noisy_actions, timesteps, global_cond=obs_cond)
             
             # L2 loss
-            loss_diffusion = F.mse_loss(noise_pred, noise)
-            loss = loss_diffusion + (
-                self.learned_temporal_cfg.history_reconstruction.lambda_history * loss_history
-                if self.learned_temporal_enabled and "history_decoder" in self.nets else 0.0
-            )
+            loss = F.mse_loss(noise_pred, noise)
             
             # logging
             losses = {
-                "l2_loss": loss,
-                "diffusion_loss": loss_diffusion,
-                "history_loss": loss_history,
+                "l2_loss": loss
             }
             info["losses"] = TensorUtils.detach(losses)
 
@@ -528,9 +269,6 @@ class DiffusionPolicyUNet(PolicyAlgo):
         action_queue = deque(maxlen=Ta)
         self.obs_queue = obs_queue
         self.action_queue = action_queue
-        if self.learned_temporal_enabled:
-            self.temporal_latent_queue = deque(maxlen=To)
-            self.temporal_z_prev = None
     
     def get_action(self, obs_dict, goal_dict=None):
         """
@@ -547,9 +285,6 @@ class DiffusionPolicyUNet(PolicyAlgo):
         To = self.algo_config.horizon.observation_horizon
         Ta = self.algo_config.horizon.action_horizon
         
-        if self.learned_temporal_enabled:
-            self._advance_temporal_state(obs_dict)
-
         if len(self.action_queue) == 0:
             # no actions left, run inference
             # [1,T,Da]
@@ -565,43 +300,6 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # [1,Da]
         action = action.unsqueeze(0)
         return action
-
-    def _advance_temporal_state(self, obs_dict):
-        """Advance exactly once per environment observation, before action reuse."""
-        def latest(value):
-            # FrameStack supplies (B, T, D); plain environments supply (B, D).
-            return value[:, -1] if value.ndim >= 3 else value
-        nets = self.ema.averaged_model if self.ema is not None else self.nets
-        with torch.no_grad():
-            if self.learned_temporal_uses_image_embeddings:
-                missing = [key for key in self.temporal_image_keys if key not in obs_dict]
-                if missing:
-                    raise KeyError("LTE-IMG-NoT requires image observations {}".format(missing))
-                images = [latest(obs_dict[key]).to(device=self.device, dtype=torch.float32) for key in self.temporal_image_keys]
-                views = self._encode_temporal_image_views(images, nets)
-                image_embedding = (
-                    nets["temporal_image_fusion"](views)
-                    if "temporal_image_fusion" in nets else torch.cat(views, dim=-1)
-                )
-                time_t = torch.empty(image_embedding.shape[0], 0, device=self.device, dtype=image_embedding.dtype)
-                self.temporal_z_prev = nets["temporal_encoder"](
-                    time_t, z_prev=self.temporal_z_prev, image_embedding_t=image_embedding
-                ).detach()
-            else:
-                if "time_signal" not in obs_dict:
-                    raise KeyError("learned_encoder requires the synthetic observation key 'time_signal'")
-                signal_key = "agent_velocity" if self.learned_temporal_cfg.input_signal == "velocity" else "direct_idleness"
-                if signal_key not in obs_dict:
-                    raise KeyError("learned_encoder requires observation key '{}'".format(signal_key))
-                time_t = latest(obs_dict["time_signal"]).to(device=self.device, dtype=torch.float32)
-                signal_t = latest(obs_dict[signal_key]).to(device=self.device, dtype=torch.float32)
-                if signal_key == "agent_velocity":
-                    max_velocity = self.obs_config.temporal_encodings.max_train_set_agent_velocity
-                    if max_velocity is None or max_velocity <= 0:
-                        raise ValueError("Velocity learned_encoder requires max_train_set_agent_velocity")
-                    signal_t = 2.0 * signal_t / float(max_velocity) - 1.0
-                self.temporal_z_prev = nets["temporal_encoder"](time_t, signal_t, self.temporal_z_prev).detach()
-        self.temporal_latent_queue.append(self.temporal_z_prev)
         
     def _get_action_trajectory(self, obs_dict, goal_dict=None):
         assert not self.nets.training
@@ -635,13 +333,6 @@ class DiffusionPolicyUNet(PolicyAlgo):
             assert inputs["obs"][k].ndim - 2 == len(self.obs_shapes[k])
         obs_features = TensorUtils.time_distributed(inputs, nets["policy"]["obs_encoder"], inputs_as_kwargs=True)
         assert obs_features.ndim == 3  # [B, T, D]
-        if self.learned_temporal_enabled:
-            if not self.temporal_latent_queue:
-                raise RuntimeError("Temporal state must be advanced before inference")
-            latents = list(self.temporal_latent_queue)
-            latents = [latents[0]] * (To - len(latents)) + latents
-            temporal_latents = torch.stack(latents, dim=1)
-            obs_features = torch.cat([obs_features, temporal_latents], dim=-1)
         B = obs_features.shape[0]
 
         # reshape observation to (B,obs_horizon*obs_dim)

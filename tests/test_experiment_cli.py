@@ -1,8 +1,6 @@
 """Tests for experiment-CLI discovery labels."""
 import importlib.util
-import json
 import sys
-import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -16,23 +14,13 @@ SPEC.loader.exec_module(experiment_cli)
 
 
 class TestExperimentCli(unittest.TestCase):
-    def test_discovery_uses_explicit_lte_config_files(self):
-        experiments = experiment_cli.discover_experiments()
-        lte_experiments = [
-            experiment for experiment in experiments if experiment.algorithm == "lte_diffusion_policy_mod"
-        ]
-        self.assertEqual({experiment.environment for experiment in lte_experiments}, {
-            "can", "lift", "square", "transport", "waitatgoal", "liftqa",
-        })
-        self.assertTrue(all(experiment.config_path.name == "lte_diffusion_policy_mod.json" for experiment in lte_experiments))
-        self.assertFalse(any("_generated" in experiment.config_path.parts for experiment in experiments))
 
     def test_screen_session_name_is_short_and_unique(self):
         session = experiment_cli.make_screen_session(
-            "train-lift-learned_temporal_diffusion_policy-lte_idle_direct_time_direct_idle-seed1000"
+            "train-lift-tc_diffusion_policy_mod-idleness_and_sinusoidal_progress_conditioning-seed1000"
         )
         next_session = experiment_cli.make_screen_session(
-            "train-lift-learned_temporal_diffusion_policy-lte_idle_direct_time_direct_idle-seed1001"
+            "train-lift-tc_diffusion_policy_mod-idleness_and_sinusoidal_progress_conditioning-seed1001"
         )
         self.assertLessEqual(len(session), 64)
         self.assertTrue(session.startswith("robomimic-train-lift-"))
@@ -64,48 +52,6 @@ class TestExperimentCli(unittest.TestCase):
         self.assertLess(command.index("--seed 2"), command.index("--seed 3"))
         self.assertIn("vla_alert", command)
         self.assertIn('exit "$status"', command)
-
-    def test_learned_temporal_variant_is_shown(self):
-        with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "config.json"
-            config_path.write_text(json.dumps({
-                "observation": {"temporal_encodings": {
-                    "learned_encoder": {"enabled": True, "input_signal": "velocity"},
-                    "use_direct_time": True,
-                    "use_direct_idleness": True,
-                    "use_idleness_encoding": True,
-                }},
-            }), encoding="utf-8")
-            experiment = experiment_cli.Experiment("lift", "tc_diffusion_policy", config_path, "ph")
-            self.assertIn("LTE-velocity", experiment.label)
-            self.assertIn("direct-time", experiment.label)
-            self.assertIn("direct-idle", experiment.label)
-
-    def test_explicit_lte_config_is_image_without_time(self):
-        config_path = (
-            Path(__file__).resolve().parents[1]
-            / "robomimic"
-            / "exps"
-            / "temporaldp"
-            / "lift"
-            / "ph"
-            / "image"
-            / "lte_diffusion_policy_mod.json"
-        )
-        experiment = experiment_cli.Experiment(
-            "lift",
-            "lte_diffusion_policy_mod",
-            config_path,
-            "ph",
-        )
-        learned = experiment_cli.load_config(experiment)["observation"]["temporal_encodings"]["learned_encoder"]
-        self.assertTrue(learned["enabled"])
-        self.assertEqual(learned["input_signal"], "image_embedding")
-        self.assertTrue(learned["use_image_embedding"])
-        self.assertFalse(learned["use_timestep_signal"])
-        self.assertEqual(learned["num_images"], 1)
-        self.assertFalse(learned["multi_image_fusion"])
-        self.assertTrue(learned["cache_image_embeddings"])
 
 
 if __name__ == "__main__":

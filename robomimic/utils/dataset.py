@@ -25,19 +25,6 @@ from robomimic.utils.temporal_encodings import (
     IdlenessEncoder,
 )
 
-
-def _normalise_zero_to_max(values, maximum):
-    """Map a non-negative temporal value from [0, maximum] to [-1, 1]."""
-    if maximum is None or float(maximum) <= 0:
-        raise ValueError("Temporal conditioning requires a positive dataset maximum")
-    return (2.0 * np.asarray(values, dtype=np.float32) / float(maximum) - 1.0).astype(np.float32)
-
-
-def _binary_idle_indicator(velocity, maximum, threshold):
-    if maximum is None or float(maximum) <= 0:
-        raise ValueError("Direct idleness requires a positive max_train_set_agent_velocity")
-    return (np.abs(np.asarray(velocity, dtype=np.float32)) / float(maximum) < float(threshold)).astype(np.float32)
-
 class SequenceDataset(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -163,31 +150,14 @@ class SequenceDataset(torch.utils.data.Dataset):
         
         self.synthetic_obs_keys = {
             "idleness",
-            "direct_idleness",
-            "time_signal",
             "saturating_progress_encoding",
             "sinusoidal_progress_encoding",
         }
-        learned_cfg = (temporal_encoding_config or {}).get("learned_encoder", {})
-        self.learned_temporal_enabled = bool(learned_cfg.get("enabled", False))
-        self.learned_temporal_input_signal = learned_cfg.get("input_signal", "velocity")
-        if self.learned_temporal_input_signal not in ("velocity", "idle_indicator", "image_embedding"):
-            raise ValueError("learned_encoder.input_signal must be 'velocity', 'idle_indicator', or 'image_embedding'")
-        self.learned_temporal_uses_image_embeddings = (
-            self.learned_temporal_input_signal == "image_embedding"
-            or bool(learned_cfg.get("use_image_embedding", False))
-        )
-        self.learned_temporal_idle_threshold = float(learned_cfg.get("idle_threshold", 0.03))
         # The idleness encoding needs one auxiliary velocity signal. Native
         # temporal datasets provide it directly, while legacy robosuite data
         # derives it from joint and gripper velocities.
         self.additional_keys_to_load = set()
-        needs_velocity = (
-            "idleness" in self.obs_keys
-            or "direct_idleness" in self.obs_keys
-            or (self.learned_temporal_enabled and not self.learned_temporal_uses_image_embeddings)
-        )
-        if needs_velocity:
+        if "idleness" in self.obs_keys:
             first_obs = self.hdf5_file["data/{}/obs".format(self.demos[0])]
             if "agent_velocity" in first_obs:
                 self.additional_keys_to_load.add("agent_velocity")
@@ -200,14 +170,6 @@ class SequenceDataset(torch.utils.data.Dataset):
         self.obs_keys_in_file += list(self.additional_keys_to_load)
 
         self.temporal_encoding_config = temporal_encoding_config or {}
-        if self.learned_temporal_enabled:
-            self._learned_temporal_max_history = max(self._demo_id_to_demo_length.values())
-            self._temporal_image_offsets = {}
-            temporal_image_offset = 0
-            for demo in self.demos:
-                self._temporal_image_offsets[demo] = temporal_image_offset
-                temporal_image_offset += self._demo_id_to_demo_length[demo]
-            self._temporal_num_images = temporal_image_offset
 
         # maybe prepare for observation normalization
         self.obs_normalization_stats = None
@@ -265,36 +227,6 @@ class SequenceDataset(torch.utils.data.Dataset):
             mag_gripper_robot1 = np.linalg.norm(obs_dict["robot1_gripper_qvel"], axis=-1)
             mag_total += mag_joint_robot1 + 0.1 * mag_gripper_robot1
         return mag_total[:, None].astype(np.float32)
-
-    def get_temporal_image_batch(self, indices, image_keys):
-        """Fetch and preprocess absolute episode-frame indices for the LTE cache.
-
-        This is intentionally called by the main training process, not workers:
-        batches carry only lightweight indices, as in the original implementation.
-        """
-        if not self.learned_temporal_enabled or not self.learned_temporal_uses_image_embeddings:
-            raise RuntimeError("temporal image access requested when LTE image mode is disabled")
-        indices = np.asarray(indices, dtype=np.int64).reshape(-1)
-        if np.any(indices < 0) or np.any(indices >= self._temporal_num_images):
-            raise IndexError("temporal image index is outside the training dataset")
-        results = {key: [None] * len(indices) for key in image_keys}
-        for demo in self.demos:
-            start = self._temporal_image_offsets[demo]
-            length = self._demo_id_to_demo_length[demo]
-            selected = np.flatnonzero((indices >= start) & (indices < start + length))
-            if not len(selected):
-                continue
-            local_indices = indices[selected] - start
-            # h5py's fancy indexing requires increasing indices. Preserve the
-            # caller's order because it matches the flattened history mask.
-            sorted_indices, inverse = np.unique(local_indices, return_inverse=True)
-            for key in image_keys:
-                images = self.hdf5_file["data/{}/obs/{}".format(demo, key)][sorted_indices]
-                images = images[inverse]
-                images = ObsUtils.process_obs(images, obs_key=key).astype(np.float32, copy=False)
-                for output_index, image in zip(selected, images):
-                    results[key][output_index] = image
-        return {key: np.ascontiguousarray(np.stack(value)) for key, value in results.items()}
     
     def load_demo_info(self, filter_by_attribute=None, demos=None, demo_limit=None):
         """
@@ -623,26 +555,7 @@ class SequenceDataset(torch.utils.data.Dataset):
 
         # --- Temporal encodings (opt-in via obs_keys) ---
         seq_len = meta["actions"].shape[0]
-        # The observation sequence includes frame-stack history, so its first
-        # timestamp precedes index_in_demo by n_frame_stack - 1.
-        t = np.maximum(0, np.arange(seq_len) + index_in_demo - (self.n_frame_stack - 1))
-
-        if "time_signal" in self.obs_keys:
-            meta["obs"]["time_signal"] = _normalise_zero_to_max(
-                t[:, None], self.temporal_encoding_config.get("max_train_set_steps")
-            )
-            if self.load_next_obs:
-                meta["next_obs"]["time_signal"] = meta["obs"]["time_signal"]
-
-        if "direct_idleness" in self.obs_keys:
-            velocity = self._compute_agent_velocity_from_obs(meta["obs"])
-            meta["obs"]["direct_idleness"] = _binary_idle_indicator(
-                velocity,
-                self.temporal_encoding_config.get("max_train_set_agent_velocity"),
-                self.temporal_encoding_config.get("idleness_rest_thresh", 0.03),
-            )
-            if self.load_next_obs:
-                meta["next_obs"]["direct_idleness"] = meta["obs"]["direct_idleness"]
+        t = np.arange(seq_len) + index_in_demo
 
         # Sinusoidal progress encoding
         if "sinusoidal_progress_encoding" in self.obs_keys:
@@ -677,57 +590,6 @@ class SequenceDataset(torch.utils.data.Dataset):
             meta["obs"]["idleness"] = idleness
             if self.load_next_obs:
                 meta["next_obs"]["idleness"] = idleness
-
-        if self.learned_temporal_enabled:
-            # Supply the entire real episode prefix.  Recurrent state is never
-            # reset at arbitrary sampled windows during training.
-            history_end = min(demo_length, index_in_demo + 1)
-            history_obs = None
-            if not self.learned_temporal_uses_image_embeddings:
-                history_obs = self.get_obs_sequence_from_demo(
-                    demo_id, index_in_demo=0, keys=self.obs_keys_in_file,
-                    seq_length=history_end, prefix="obs",
-                )
-            history_velocity = None if history_obs is None else self._compute_agent_velocity_from_obs(history_obs)
-            if self.learned_temporal_uses_image_embeddings:
-                history_signal = np.zeros((history_end, 0), dtype=np.float32)
-            elif self.learned_temporal_input_signal == "idle_indicator":
-                history_signal = _binary_idle_indicator(
-                    history_velocity,
-                    self.temporal_encoding_config.get("max_train_set_agent_velocity"),
-                    self.learned_temporal_idle_threshold,
-                )
-            else:
-                history_signal = _normalise_zero_to_max(
-                    history_velocity,
-                    self.temporal_encoding_config.get("max_train_set_agent_velocity"),
-                )
-            history_time = _normalise_zero_to_max(
-                np.arange(history_end, dtype=np.float32)[:, None],
-                self.temporal_encoding_config.get("max_train_set_steps"),
-            )
-            history_length = history_end
-            max_history = self._learned_temporal_max_history
-            meta["temporal_history_time"] = np.zeros((max_history, 1), dtype=np.float32)
-            meta["temporal_history_signal"] = np.zeros((max_history, history_signal.shape[-1]), dtype=np.float32)
-            meta["temporal_history_time"][:history_length] = history_time
-            meta["temporal_history_signal"][:history_length] = history_signal
-            meta["temporal_history_mask"] = np.arange(max_history) < history_length
-            # Match the first To policy observations, including repeated frames
-            # at episode boundaries.
-            obs_indices = np.clip(
-                index_in_demo - (self.n_frame_stack - 1) + np.arange(self.n_frame_stack),
-                0, history_end - 1,
-            )
-            meta["temporal_obs_history_indices"] = obs_indices.astype(np.int64)
-            if self.learned_temporal_uses_image_embeddings:
-                image_indices = np.zeros(max_history, dtype=np.int64)
-                image_indices[:history_length] = np.arange(
-                    self._temporal_image_offsets[demo_id],
-                    self._temporal_image_offsets[demo_id] + history_length,
-                    dtype=np.int64,
-                )
-                meta["temporal_history_image_indices"] = image_indices
 
         # get action components
         ac_dict = OrderedDict()

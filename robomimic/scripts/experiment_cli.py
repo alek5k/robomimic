@@ -61,16 +61,6 @@ class Experiment:
             return ""
 
         features = []
-        learned = temporal.get("learned_encoder", {})
-        if learned.get("enabled", False):
-            if learned.get("input_signal") == "image_embedding" and not learned.get("use_timestep_signal", False):
-                features.append("LTE-IMG-NoT")
-            else:
-                features.append("LTE-{}".format(learned.get("input_signal", "velocity")))
-        if temporal.get("use_direct_time", False):
-            features.append("direct-time")
-        if temporal.get("use_direct_idleness", False):
-            features.append("direct-idle")
         if temporal.get("use_idleness_encoding", False):
             features.append("ID")
         if temporal.get("use_sinusoidal_progress_encoding", False):
