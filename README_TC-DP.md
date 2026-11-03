@@ -38,7 +38,34 @@ Then postprocess the dataset to get image datasets:
 ```
 
 ### Download TC-DP trained checkpoints and inference datasets
-`./download_checkpoints_and_inference_datasets.sh`
+
+The [TC-DP robomimic data](https://huggingface.co/datasets/erdrsvhr9/temporally_conditioned_diffusion_policy_robomimic)
+contain the 36 selected checkpoints and 36 recorded evaluations for BC, BC-RNN,
+DP and TC-DP: three training seeds per method for Can, Lift and Square.
+The exact main-paper selection is in `paper_upload_files.json`.
+
+```bash
+python dataset_upload.py --download
+# Equivalent shell entry point:
+./download_checkpoints_and_inference_datasets.sh
+```
+
+Use a clean rollout directory containing only these selected files per method
+and task when combining results. Download demonstrations from robomimic using
+the instructions above; Can, Lift and Square demonstrations are not duplicated
+in the TC-DP upload. Rollout HDF5 files already contain no image arrays.
+
+To upload the selected checkpoints, saved configurations and rollout files:
+
+```bash
+python dataset_upload.py --dry-run
+python dataset_upload.py
+```
+
+Upload requires Hugging Face write access. Only the explicit current-paper
+selection is uploaded; demonstrations and ablations are excluded. Existing
+hosted files and repository visibility are preserved. Use `--stage-dir` to
+change the default `/tmp/tcdp-paper-hf-upload/robomimic` staging directory.
 
 ### Config Setup
 The configs for the paper are already included in the repository. Within these configs, the `train/data` config variables need to be set to correspond to your repo location in the following configs:
