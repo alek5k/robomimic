@@ -50,7 +50,7 @@ class ParsedDatasetInfo:
 
 @dataclass
 class AnalysisConfig:
-    task_names: list[str] = field(default_factory=lambda: ["temporal"]) # "lift", "can", "square", 
+    task_names: list[str] = field(default_factory=lambda: ["can", "lift", "square"])
     dataset_split: str = "ph"  # Robomimic split for Lift / Can / Square (e.g. "ph" or "mh")
     temporal_dataset_split: str = "waitatgoal"  # "waitatgoal" or "liftqa"
     control_frequency_hz: float = 20.0

@@ -8,7 +8,7 @@ Temporal conditioning encodings are implemented in:
 Temporal encoding wrapper is implemented in:
 `robomimic/envs/wrappers.py`, class `TemporalEncodingWrapper`
 
-Temporal analysis is implemented in `scripts/analysis_temporal.py`
+Temporal analysis is implemented in `robomimic/scripts/analysis_temporal.py`.
 
 
 ### Installing
@@ -44,15 +44,21 @@ Then postprocess the dataset to get image datasets:
 The configs for the paper are already included in the repository. Within these configs, the `train/data` config variables need to be set to correspond to your repo location in the following configs:
 
 ```
-robomimic/robomimic/exps/temporaldp/can/ph/image/bc.json
-robomimic/robomimic/exps/temporaldp/can/ph/image/bc_rnn.json
-robomimic/robomimic/exps/temporaldp/can/ph/image/diffusion_policy.json
-robomimic/robomimic/exps/temporaldp/can/ph/image/tc_diffusion_policy.json
+robomimic/exps/temporaldp/can/ph/image/bc.json
+robomimic/exps/temporaldp/can/ph/image/bc_rnn.json
+robomimic/exps/temporaldp/can/ph/image/diffusion_policy_mod.json
+robomimic/exps/temporaldp/can/ph/image/tc_diffusion_policy_mod.json
 ```
+
+Paths are relative to the repository root. Equivalent configurations are provided
+for `lift` and `square`. The `_mod` DP and TC-DP configurations are used for the
+paper comparison.
 
 ### Training
 Replace ALGO below with:
-bc, bc_rnn, diffusion_policy and tc_diffusion_policy.
+bc, bc_rnn, diffusion_policy_mod and tc_diffusion_policy_mod.
+
+Train three independent seeds for every method and task:
 
 ```bash
 conda activate robomimic2 && cd ~/Repos/robomimic
@@ -64,6 +70,37 @@ for SEED in 1 2 3; do
     CUDA_VISIBLE_DEVICES=${GPU} MUJOCO_GL=egl python robomimic/scripts/train.py --config robomimic/exps/temporaldp/${ENV}/${SPLIT}/image/${ALGO}.json --seed=${SEED}
 done
 ```
+
+### Current paper analysis
+
+Use the combined results from all three training seeds for Can, Lift, and Square.
+After downloading or generating the demonstration and rollout datasets, run from
+the repository root:
+
+```bash
+python -m robomimic.scripts.analysis_temporal \
+    --task_names '["can", "lift", "square"]' --dataset_split ph \
+    --rollout_sampling_mode all --rollout_selection_mode combine
+```
+
+This is also the default analysis configuration. Put the demonstration dataset at
+`datasets/<task>/ph/image_v15.hdf5` and one rollout HDF5 file per training seed in
+each of these directories:
+
+```text
+rollouts/<task>/ph/bc/
+rollouts/<task>/ph/bc_rnn/
+rollouts/<task>/ph/diffusion_policy_mod/
+rollouts/<task>/ph/tc_diffusion_policy_mod/
+```
+
+Keep only the three intended training-seed files in each directory: the analysis
+combines all matching files. Episode-duration Wasserstein distances are computed
+per file against the demonstrations, then reported as mean and sample standard
+deviation across training seeds. Success rates use the same aggregation. All
+rollouts are used; avoid `--rollout_selection_mode best` for this comparison.
+Distribution plots pool rollouts across seeds. Plots are written under
+`robomimic/scripts/analysis_temporal/`, and the LaTeX table is printed to stdout.
  
 ### Evaluations
 Replace with your RUN_ID generated during training.
