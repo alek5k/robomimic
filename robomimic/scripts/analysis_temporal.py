@@ -36,10 +36,16 @@ class ParsedDatasetInfo:
     step_counts: list[float] | None = None
     pause_durations: list[float] | None = None
     success_rate: float | None = None
-    success_rate_ci95: float | None = None
+    success_rate_std: float | None = None
     W_pause: float | None = None
     W_episode: float | None = None
     W_total: float | None = None
+    W_episode_std: float | None = None
+    W_episode_per_run: list[float] | None = None
+    # Retain run boundaries for equal-weight seed statistics; pooled samples
+    # remain in step_counts / pause_durations for distribution plots.
+    rollout_step_counts: list[list[int]] | None = None
+    rollout_pause_durations: list[list[float]] | None = None
 
 
 @dataclass
@@ -156,7 +162,7 @@ def create_tex_table_from_results(
     }
     metric_headers = {
         "W_episode": r"$W_{\text{episode}}$",
-        "success_rate": r"Success (\%)",
+        "success_rate": r"SR (\%)",
     }
     metrics = ["W_episode"] + (["success_rate"] if include_success else [])
     datasets = [r for r in results.values() if not r.is_demo_dataset]
@@ -179,12 +185,13 @@ def create_tex_table_from_results(
         groups.setdefault(method, {})[dataset.task_name] = dataset
 
     methods = sorted(groups.keys(), key=lambda method: (method_order.get(method, 99), method))
-    mins = {
-        env: min(
-            (float(d.W_episode) for d in datasets if d.task_name == env and d.W_episode is not None),
-            default=float("inf"),
+    ranked = {
+        (env, metric): sorted(
+            {float(getattr(d, metric)) for method in methods
+             if (d := groups[method].get(env)) is not None and getattr(d, metric) is not None},
+            reverse=(metric == "success_rate"),
         )
-        for env in env_order
+        for env in env_order for metric in metrics
     }
     def fmt_cell(env: str, d: ParsedDatasetInfo | None, metric: str):
         if d is None:
@@ -194,15 +201,21 @@ def create_tex_table_from_results(
         if value is None:
             return "x"
 
-        if metric == "success_rate":
-            ci95 = d.success_rate_ci95
-            if ci95 is None:
-                return rf"{float(value):.1f}\%"
-            return rf"${float(value):.1f} \pm {float(ci95):.1f}\%$"
+        order = ranked[env, metric]
+        bold = bool(order) and float(value) == order[0]
+        underline = len(order) > 1 and float(value) == order[1]
+        precision = 1 if metric == "success_rate" else 2
+        text = f"{float(value):.{precision}f}"
+        std = getattr(d, metric + "_std", None)
+        if std is not None:
+            mean = (rf"\mathbf{{{text}}}" if bold else
+                    rf"\underline{{{text}}}" if underline else text)
+            return rf"${mean}{{\pm}}{format_std(float(std), precision)}$"
 
-        text = f"{float(value):.2f}"
-        if abs(float(value) - mins[env]) < 5e-3:
+        if bold:
             return rf"\textbf{{{text}}}"
+        if underline:
+            return rf"\underline{{{text}}}"
         return text
 
     header = " & ".join(metric_headers[m] for m in metrics)
@@ -354,6 +367,25 @@ def success_rate_percent(success_flags: list[float]) -> float | None:
     return 100.0 * float(np.mean(np.asarray(success_flags) > 0.5))
 
 
+def format_std(value: float, precision: int = 2) -> str:
+    """Add decimal places when rounding would hide a nonzero SD."""
+    text = f"{value:.{precision}f}"
+    while value > 0 and float(text) == 0:
+        precision += 1
+        text = f"{value:.{precision}f}"
+    return text
+
+
+def mean_and_std(values: list[float]) -> tuple[float | None, float | None]:
+    """Mean and sample standard deviation across independent runs."""
+    if not values:
+        return None, None
+    mean = float(np.mean(values))
+    if len(values) < 2:
+        return mean, None
+    return mean, float(np.std(values, ddof=1))
+
+
 @draccus.wrap()
 def main(cfg: AnalysisConfig):
     invalid_task_names = [task_name for task_name in cfg.task_names if task_name not in TASK_NAMES]
@@ -452,7 +484,7 @@ def parse_datasets(cfg: AnalysisConfig, task_name: str, datasets: list[DatasetLo
                 step_counts=step_counts,
                 pause_durations=pause_durations,
                 success_rate=success_rate if success_rate is not None else 100.0,
-                success_rate_ci95=0.0,
+                success_rate_std=None,
             )
             print("Demo episodes: {} ({})".format(len(step_counts), dataset.label or "Demo"))
             continue
@@ -521,7 +553,7 @@ def parse_datasets(cfg: AnalysisConfig, task_name: str, datasets: list[DatasetLo
                 step_counts=selected["step_counts"],
                 pause_durations=selected["pause_durations"],
                 success_rate=selected["success_rate"],
-                success_rate_ci95=0.0 if selected["success_rate"] is not None else None,
+                success_rate_std=None,
                 W_episode=selected["wd"],
                 W_total=selected["wd"],
             )
@@ -547,12 +579,7 @@ def parse_datasets(cfg: AnalysisConfig, task_name: str, datasets: list[DatasetLo
             if candidate["success_rate"] is not None:
                 rollout_success_rates.append(candidate["success_rate"])
 
-        success_rate_mean = float(np.mean(rollout_success_rates)) if rollout_success_rates else None
-        success_rate_ci95 = None
-        if len(rollout_success_rates) >= 2:
-            success_rate_ci95 = 1.96 * float(np.std(rollout_success_rates, ddof=1)) / np.sqrt(len(rollout_success_rates))
-        elif len(rollout_success_rates) == 1:
-            success_rate_ci95 = 0.0
+        success_rate_mean, success_rate_std = mean_and_std(rollout_success_rates)
         parsed_datasets[dataset.path] = ParsedDatasetInfo(
             path=dataset.path,
             short_label=label,
@@ -562,7 +589,10 @@ def parse_datasets(cfg: AnalysisConfig, task_name: str, datasets: list[DatasetLo
             step_counts=combined_step_counts,
             pause_durations=combined_pause_durations if has_pause_durations else None,
             success_rate=success_rate_mean,
-            success_rate_ci95=success_rate_ci95,
+            success_rate_std=success_rate_std,
+            rollout_step_counts=[candidate["step_counts"] for candidate in rollout_candidates],
+            rollout_pause_durations=([candidate["pause_durations"] for candidate in rollout_candidates]
+                                     if has_pause_durations else None),
         )
         print("Combined episodes: {} ({})".format(len(combined_step_counts), label))
 
@@ -584,16 +614,21 @@ def calculate_wasserstein_distances(
     demo_pause_durations = demonstration_dataset.pause_durations
 
     for dataset_path, parsed_info in parsed_datasets.items():
-        step_counts = np.asarray(parsed_info.step_counts, dtype=float)
-        w_distance_step = wasserstein_distance(step_counts, demo_steps) / control_frequency_hz
+        step_runs = parsed_info.rollout_step_counts or [parsed_info.step_counts]
+        per_run_w = [float(wasserstein_distance(np.asarray(steps, dtype=float), demo_steps)
+                           / control_frequency_hz) for steps in step_runs]
+        w_distance_step, w_distance_step_std = mean_and_std(per_run_w)
         w_distance_pause = None
         if demo_pause_durations is not None and parsed_info.pause_durations is not None:
-            w_distance_pause = wasserstein_distance(
-                np.asarray(parsed_info.pause_durations, dtype=float),
-                np.asarray(demo_pause_durations, dtype=float),
-            )
+            pause_runs = parsed_info.rollout_pause_durations or [parsed_info.pause_durations]
+            w_distance_pause = float(np.mean([
+                wasserstein_distance(np.asarray(pauses, dtype=float),
+                                     np.asarray(demo_pause_durations, dtype=float))
+                for pauses in pause_runs]))
         parsed_datasets[dataset_path].W_pause = w_distance_pause
         parsed_datasets[dataset_path].W_episode = w_distance_step
+        parsed_datasets[dataset_path].W_episode_std = w_distance_step_std
+        parsed_datasets[dataset_path].W_episode_per_run = per_run_w
         parsed_datasets[dataset_path].W_total = w_distance_step + (w_distance_pause or 0.0)
 
 
