@@ -34,3 +34,31 @@ with just these three selected files per method/task when combining results.
 
 WaitAtGoal, LiftQA, LiftQA-Real and PTP data are hosted at
 https://huggingface.co/datasets/erdrsvhr9/temporally_conditioned_diffusion_policy.
+
+## Citation
+
+Temporary citation for this repository during anonymous review. Replace this
+entry with the final publication details when available.
+
+```bibtex
+@misc{tcdp2026_robomimic,
+  title={Mitigating Temporal Failures in Diffusion-Based Robotic Imitation Learning},
+  author={{Anonymous Authors}},
+  year={2026},
+  howpublished={Hugging Face dataset repository},
+  url={https://huggingface.co/datasets/erdrsvhr9/temporally_conditioned_diffusion_policy_robomimic},
+  note={Anonymous review version; temporary citation}
+}
+```
+
+If you use the robomimic artifacts, also cite the original robomimic work:
+
+```bibtex
+@inproceedings{robomimic2021,
+  title={What Matters in Learning from Offline Human Demonstrations for Robot Manipulation},
+  author={Mandlekar, Ajay and Xu, Danfei and Wong, Josiah and Nasiriany, Soroush and Wang, Chen and Kulkarni, Rohun and Fei-Fei, Li and Savarese, Silvio and Zhu, Yuke and Martin-Martin, Roberto},
+  booktitle={Conference on Robot Learning},
+  year={2021}
+}
+```
+
